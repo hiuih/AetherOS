@@ -1,0 +1,83 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+# aether-boot-stage1 — the deterministic boot agent (the "dumb monitor")
+# Launched by PID 1 (aether-init) BEFORE systemd starts. Runs as root with the
+# real root mounted but no services up yet, so it can repair config before the
+# OS reads it. NO AI here — pure local rules. The AI "smart brain" (claused)
+# escalates later, once networking/desktop are up.
+#
+# Responsibilities (reconciliation loop, current-state vs golden-state):
+#   • prove Aether owned PID 1 this boot   (/run/aether-pid1)
+#   • count boots; restore last-known-good config after repeated failures
+#   • verify a small whitelist of boot/Aether-critical files; restore from golden
+#   • detect missing credentials and flag the post-boot provisioning wizard
+#   • flag anomalies for the AI brain to investigate after boot
+# Fail-open: any error just lets boot continue.
+# ════════════════════════════════════════════════════════════════════════════
+exec 2>/dev/null
+VAULT=/var/lib/aetheros/vault
+GOLDEN=$VAULT/golden
+LKG=$VAULT/lkg
+LOG=/var/log/aetheros/boot.log
+mkdir -p "$VAULT" /var/log/aetheros
+
+ut="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"
+echo "[$ut] stage1: pre-systemd boot agent" >> "$LOG"
+
+# Proof Aether initialized as PID 1 this boot (read by the indicator / health UI).
+echo "aether-init owned PID 1 @ uptime ${ut}s" > /run/aether-pid1 2>/dev/null
+
+# Honor the bypass switch.
+if grep -qw aether.disable /proc/cmdline 2>/dev/null; then
+    echo "[$ut] stage1: aether.disable — no-op" >> "$LOG"
+    exit 0
+fi
+
+# ── Boot-success counter ─────────────────────────────────────────────────────
+# Incremented every boot; reset to 0 once the desktop is reached (aether-lkg).
+CNT=$VAULT/bootcount
+n="$(cat "$CNT" 2>/dev/null || echo 0)"; case "$n" in ''|*[!0-9]*) n=0;; esac
+n=$((n + 1)); echo "$n" > "$CNT"
+echo "[$ut] stage1: boot #$n since last success" >> "$LOG"
+
+# ── Atomic-ish rollback: too many failed boots → restore last-known-good ─────
+if [ "$n" -ge 4 ] && [ -d "$LKG" ]; then
+    echo "[$ut] stage1: $n boots without success — restoring last-known-good config" >> "$LOG"
+    cp -a "$LKG/." / 2>/dev/null
+    date +%s > "$VAULT/lkg-restored.flag"
+    echo 0 > "$CNT"
+fi
+
+# ── Reconcile critical files against the golden snapshot ─────────────────────
+# Golden mirrors absolute paths of a SMALL whitelist (see aether-snapshot).
+if [ -d "$GOLDEN" ]; then
+    missing=0
+    while IFS= read -r rel; do
+        [ -z "$rel" ] && continue
+        if [ ! -e "/$rel" ] && [ -e "$GOLDEN/$rel" ]; then
+            mkdir -p "$(dirname "/$rel")"
+            cp -a "$GOLDEN/$rel" "/$rel" 2>/dev/null && missing=$((missing+1))
+        fi
+    done < <(cd "$GOLDEN" && find . -type f | sed 's|^\./||')
+    [ "$missing" -gt 0 ] && echo "[$ut] stage1: restored $missing missing critical file(s) from golden" >> "$LOG"
+fi
+
+# ── Credential check (zero-touch provisioning trigger) ──────────────────────
+have_key=0
+for k in /etc/aetheros/api_key /home/*/.config/aetheros/api_key /root/.config/aetheros/api_key; do
+    [ -s "$k" ] && have_key=1 && break
+done
+if [ "$have_key" -eq 0 ]; then
+    : > "$VAULT/needs-provisioning.flag"
+    echo "[$ut] stage1: no API key — provisioning wizard will run at login" >> "$LOG"
+fi
+
+# ── Anomaly flag for the AI brain (handled post-boot by claused) ────────────
+# Example deterministic anomalies worth an AI look: a prior LKG rollback, or a
+# critical service file that had to be restored. The daemon reads this flag.
+if [ -f "$VAULT/lkg-restored.flag" ]; then
+    echo "boot-rollback $(date +%s)" >> "$VAULT/brain-queue"
+fi
+
+echo "[$ut] stage1: done — handing back to PID 1 for systemd pivot" >> "$LOG"
+exit 0

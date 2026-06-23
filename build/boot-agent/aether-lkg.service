@@ -1,0 +1,16 @@
+[Unit]
+Description=AetherOS mark boot successful + promote last-known-good
+# Runs once the graphical desktop is reached — i.e. a known-good boot.
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=oneshot
+# Reset the boot-failure counter and promote the current golden state to LKG.
+ExecStartPre=/bin/sh -c 'mkdir -p /var/lib/aetheros/vault; echo 0 > /var/lib/aetheros/vault/bootcount'
+ExecStartPre=/bin/sh -c 'rm -f /var/lib/aetheros/vault/lkg-restored.flag'
+ExecStart=/usr/local/sbin/aether-snapshot lkg
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

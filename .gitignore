@@ -1,6 +1,9 @@
 # Large build artifacts
 iso/*.iso
 iso/*.sha256
+# Cached base ISO (Ubuntu) and all ISO images — never commit, multi-GB
+iso-cache/
+*.iso
 # macOS
 .DS_Store
 **/.DS_Store

@@ -1,0 +1,88 @@
+# AetherOS system-wide GNOME defaults (compiled into /etc/dconf/db/local)
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+accent-color='purple'
+gtk-theme='Catppuccin-Mocha'
+icon-theme='Papirus-Dark'
+cursor-theme='Adwaita'
+font-name='Inter 11'
+document-font-name='Inter 11'
+monospace-font-name='JetBrains Mono 11'
+clock-show-weekday=true
+show-battery-percentage=true
+enable-hot-corners=true
+
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/aetheros/wallpaper.png'
+picture-uri-dark='file:///usr/share/aetheros/wallpaper.png'
+picture-options='zoom'
+primary-color='#0a0a14'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/aetheros/wallpaper.png'
+primary-color='#0a0a14'
+
+[org/gnome/desktop/peripherals/touchpad]
+natural-scroll=true
+tap-to-click=true
+two-finger-scrolling-enabled=true
+
+[org/gnome/desktop/peripherals/mouse]
+natural-scroll=true
+
+[org/gnome/settings-daemon/plugins/color]
+night-light-enabled=true
+night-light-schedule-automatic=true
+
+# ── Global Aether hotkey: Super+A opens the AI overlay ──────────────────────
+[org/gnome/settings-daemon/plugins/media-keys]
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/aether/']
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/aether]
+name='Launch Aether AI'
+command='/opt/aether/venv/bin/python3 /opt/aether/gui/aether-ui.py'
+binding='<Super>a'
+
+# ── Shell: enable Aether indicator alongside Ubuntu's defaults ──────────────
+# Keep Ubuntu's own extensions; just add ours. Version validation is turned off
+# so our indicator loads regardless of the exact GNOME version shipped.
+[org/gnome/shell]
+disable-user-extensions=false
+disable-extension-version-validation=true
+enabled-extensions=['ubuntu-dock@ubuntu.com', 'ubuntu-appindicators@ubuntu.com', 'tiling-assistant@ubuntu.com', 'ding@rastersoft.com', 'user-theme@gnome-shell-extensions.gcampax.github.com', 'aetheros@aetheros.os']
+favorite-apps=['aether-ui.desktop', 'firefox_firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Console.desktop', 'org.gnome.TextEditor.desktop', 'org.gnome.Settings.desktop']
+
+# Custom GNOME Shell theme (top bar, overview, notifications) — clearly not stock Ubuntu
+[org/gnome/shell/extensions/user-theme]
+name='Catppuccin-Mocha'
+
+[org/gnome/shell/extensions/ding]
+show-home=false
+
+# ── Dock: bottom, centered, floating, semi-transparent (distinct from Ubuntu) ──
+[org/gnome/shell/extensions/dash-to-dock]
+dock-position='BOTTOM'
+extend-height=false
+dock-fixed=false
+autohide=true
+intellihide=true
+intellihide-mode='FOCUS_APPLICATION_WINDOWS'
+transparency-mode='FIXED'
+background-opacity=0.55
+custom-background-color=true
+background-color='#1e1e2e'
+dash-max-icon-size=46
+running-indicator-style='DOTS'
+show-apps-at-top=false
+show-trash=false
+show-mounts=false
+custom-theme-shrink=true
+click-action='minimize-or-previews'
+
+[org/gnome/mutter]
+edge-tiling=true
+dynamic-workspaces=true
+
+[org/gnome/desktop/wm/preferences]
+button-layout='appmenu:minimize,maximize,close'

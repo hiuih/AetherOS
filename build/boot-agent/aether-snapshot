@@ -1,0 +1,59 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+# aether-snapshot — capture the "golden state": a small whitelist of boot- and
+# Aether-critical config files, mirrored under the vault by absolute path so the
+# boot agent can restore any that go missing/corrupt. Also records enabled
+# services + the package manifest for reference.
+#
+#   aether-snapshot golden   → write/refresh the golden baseline
+#   aether-snapshot lkg      → promote current golden to last-known-good
+# ════════════════════════════════════════════════════════════════════════════
+set -uo pipefail
+VAULT=/var/lib/aetheros/vault
+GOLDEN=$VAULT/golden
+LKG=$VAULT/lkg
+mkdir -p "$VAULT"
+
+# Boot/Aether-critical files. Intentionally SMALL — these are things whose loss
+# breaks boot or Aether, and which are safe to restore verbatim.
+CRITICAL="
+/etc/fstab
+/etc/default/grub
+/etc/passwd
+/etc/group
+/etc/shadow
+/etc/hostname
+/etc/systemd/system/claused.service
+/etc/systemd/system/aether-lkg.service
+/etc/aetheros/autonomy.conf
+/sbin/aether-init
+/usr/lib/aether/aether-boot-stage1
+"
+
+capture_golden() {
+    rm -rf "$GOLDEN"; mkdir -p "$GOLDEN"
+    for f in $CRITICAL; do
+        [ -e "$f" ] || continue
+        d="$GOLDEN$(dirname "$f")"
+        mkdir -p "$d"
+        cp -a "$f" "$d/" 2>/dev/null || true
+    done
+    systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
+        | awk '{print $1}' > "$GOLDEN/.enabled-units" 2>/dev/null || true
+    dpkg-query -W -f='${Package}\n' 2>/dev/null > "$GOLDEN/.packages" || true
+    date +%s > "$GOLDEN/.captured"
+    echo "golden state captured to $GOLDEN"
+}
+
+promote_lkg() {
+    [ -d "$GOLDEN" ] || capture_golden
+    rm -rf "$LKG"; cp -a "$GOLDEN" "$LKG"
+    date +%s > "$LKG/.promoted"
+    echo "last-known-good promoted to $LKG"
+}
+
+case "${1:-golden}" in
+    golden) capture_golden ;;
+    lkg)    promote_lkg ;;
+    *)      echo "usage: aether-snapshot {golden|lkg}"; exit 1 ;;
+esac

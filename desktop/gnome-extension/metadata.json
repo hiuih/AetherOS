@@ -1,8 +1,8 @@
 {
   "name": "AetherOS AI",
-  "description": "Always-visible AI status indicator and quick-access panel for AetherOS",
+  "description": "Always-visible Aether AI status indicator and quick-access menu for AetherOS.",
   "uuid": "aetheros@aetheros.os",
-  "version": 1,
-  "shell-version": ["45", "46", "47", "48"],
+  "version": 2,
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
   "url": "https://aetheros.os"
 }

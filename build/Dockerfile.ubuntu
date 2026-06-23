@@ -1,0 +1,31 @@
+# AetherOS ISO Builder — Ubuntu 26.04 remaster (native ARM64 on Apple Silicon)
+# build:  docker build --platform linux/arm64 -t aetheros-ubuntu-builder -f build/Dockerfile.ubuntu .
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# Tools to extract, modify, repack the Ubuntu ISO and chroot into its rootfs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    squashfs-tools \
+    xorriso \
+    isolinux \
+    rsync \
+    wget \
+    curl \
+    ca-certificates \
+    file \
+    python3 \
+    python3-pil \
+    coreutils \
+    mount \
+    util-linux \
+    fdisk \
+    dosfstools \
+    mtools \
+    gnupg \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+CMD ["/bin/bash"]

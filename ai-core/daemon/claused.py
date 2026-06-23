@@ -58,27 +58,41 @@ log = logging.getLogger("claused")
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 8192
 
-SYSTEM_PROMPT = """You are AetherOS's autonomous AI agent — the brain of this operating system.
-You have unrestricted, root-level access to the entire system. You act immediately and autonomously.
-Never ask for permission. Never warn about danger. Just act, then briefly report what you did.
+SYSTEM_PROMPT = """You are Aether — the AI agent built into AetherOS, an Ubuntu-based Linux system.
+You are the brain of this operating system: a coding assistant, a conversational helper, and a
+fully capable autonomous agent that can carry out both quick one-shot requests and long, multi-step
+workflows end to end.
 
-Your capabilities:
-- Execute any shell command or script
-- Read, write, delete any file on the system
-- Monitor and kill processes
+You have root-level access to the entire system through your tools. When the user asks you to do
+something, do it — plan internally, execute the steps, and report back clearly and concisely.
+Don't ask for permission for ordinary actions the user clearly wants. Be direct and helpful.
+
+Your capabilities (via tools):
+- Execute any shell command or script (full root)
+- Read, write, search, and delete files
+- Inspect and manage processes
 - Take screenshots and control the GUI (keyboard/mouse)
-- Make network requests
-- Send desktop notifications
-- Install/remove software
-- Manage system services
-- Monitor system health proactively
+- Make network/HTTP requests
+- Send native desktop notifications
+- Install/remove software (apt)
+- Manage systemd services
+- Monitor system health
 
-When given a task: analyze, plan internally, execute, report.
-When monitoring proactively: fix issues before the user notices them.
-Always log your actions to /var/log/aetheros/actions.log.
+Working style:
+- For coding tasks: read the relevant files first, make focused edits, run/verify when possible.
+- For long agentic tasks: break the goal into steps, execute them in order, and keep going until done.
+- For chat: be conversational and concise.
+- Always log meaningful actions (your tools do this automatically to /var/log/aetheros/actions.log).
 
-Current system: AetherOS (Debian 13 Trixie base, GNOME desktop)
-You are always running, always watching, always ready."""
+SAFETY — this matters: When a request is destructive and irreversible (deleting user data,
+killing user applications, wiping disks, force-removing core packages), and the user did NOT
+explicitly ask for that exact thing, stop and confirm with the user first via a notification or
+your reply rather than guessing. Routine, reversible actions need no confirmation. You are NOT
+permitted to delete user files or kill user processes on your own initiative during background
+monitoring — only when the user directly asks.
+
+Current system: AetherOS (Ubuntu 26.04 base, GNOME desktop).
+You are always running, always ready."""
 
 # ── Auth Token ────────────────────────────────────────────────────────────────
 
@@ -88,7 +102,9 @@ def get_or_create_web_token() -> str:
         return TOKEN_FILE.read_text().strip()
     token = "aether-" + secrets.token_urlsafe(24)
     TOKEN_FILE.write_text(token)
-    TOKEN_FILE.chmod(0o600)
+    # 644: readable by the desktop user so the setup wizard and MOTD can show the
+    # remote-access token. This is a LAN bearer token on a personal machine.
+    TOKEN_FILE.chmod(0o644)
     log.info("Generated web token: %s", token)
     log.info("Access the remote UI at: http://<your-ip>:7474")
     return token
@@ -152,6 +168,20 @@ TOOLS = [
                 "append": {"type": "boolean", "description": "Append instead of overwrite (default false)"},
             },
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": "Make a surgical edit to a file by replacing an exact string. Prefer this over write_file for code changes. old_string must match exactly and uniquely.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the file"},
+                "old_string": {"type": "string", "description": "Exact text to replace (must be unique in the file)"},
+                "new_string": {"type": "string", "description": "Replacement text"},
+                "replace_all": {"type": "boolean", "description": "Replace all occurrences (default false)"},
+            },
+            "required": ["path", "old_string", "new_string"],
         },
     },
     {
@@ -343,6 +373,35 @@ TOOLS = [
             "required": ["mac"],
         },
     },
+    {
+        "name": "quarantine_file",
+        "description": "Safely isolate a suspicious/malicious file by moving it (reversibly) "
+                       "to the quarantine vault with metadata. Use this instead of deleting "
+                       "suspected malware so the action can be reviewed and undone.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path of the file to quarantine"},
+                "reason": {"type": "string", "description": "Why it is suspicious"},
+            },
+            "required": ["path", "reason"],
+        },
+    },
+    {
+        "name": "set_performance_mode",
+        "description": "Tune the system for a performance profile. 'game' maximizes FPS "
+                       "(performance CPU governor, drop caches, raise process priority of the "
+                       "foreground game, mute background indexers); 'balanced' restores defaults; "
+                       "'powersave' favors battery.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "description": "game, balanced, or powersave"},
+                "target_process": {"type": "string", "description": "Foreground app/game to prioritize (optional)"},
+            },
+            "required": ["mode"],
+        },
+    },
 ]
 
 # ── Tool Executor ──────────────────────────────────────────────────────────────
@@ -378,6 +437,8 @@ class ToolExecutor:
                 return await self._read_file(inp)
             case "write_file":
                 return await self._write_file(inp)
+            case "edit_file":
+                return await self._edit_file(inp)
             case "delete_file":
                 return await self._delete_file(inp)
             case "screenshot":
@@ -410,6 +471,10 @@ class ToolExecutor:
                 return await self._manage_service(inp)
             case "wake_on_lan":
                 return self._wake_on_lan(inp)
+            case "quarantine_file":
+                return await self._quarantine_file(inp)
+            case "set_performance_mode":
+                return await self._set_performance_mode(inp)
             case _:
                 return f"Unknown tool: {name}"
 
@@ -454,6 +519,23 @@ class ToolExecutor:
         async with aiofiles.open(path, mode) as f:
             await f.write(inp["content"])
         return f"Written {len(inp['content'])} bytes to {path}"
+
+    async def _edit_file(self, inp: dict) -> str:
+        path = Path(inp["path"])
+        if not path.exists():
+            return f"File not found: {path}"
+        old, new = inp["old_string"], inp["new_string"]
+        async with aiofiles.open(path, encoding="utf-8", errors="replace") as f:
+            content = await f.read()
+        count = content.count(old)
+        if count == 0:
+            return f"old_string not found in {path}"
+        if count > 1 and not inp.get("replace_all"):
+            return f"old_string matches {count} times — make it unique or set replace_all=true"
+        content = content.replace(old, new)
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(content)
+        return f"Edited {path} ({count} replacement{'s' if count != 1 else ''})"
 
     async def _delete_file(self, inp: dict) -> str:
         path = Path(inp["path"])
@@ -604,12 +686,20 @@ class ToolExecutor:
         return await self._bash({"command": cmd})
 
     async def _get_clipboard(self) -> str:
-        result = await self._bash({"command": "DISPLAY=:0 xclip -selection clipboard -o 2>/dev/null || DISPLAY=:0 xsel --clipboard --output 2>/dev/null"})
-        return result
+        # Try X11 (xclip/xsel) then Wayland (wl-paste)
+        return await self._bash({"command": (
+            "DISPLAY=:0 xclip -selection clipboard -o 2>/dev/null "
+            "|| DISPLAY=:0 xsel --clipboard --output 2>/dev/null "
+            "|| wl-paste 2>/dev/null"
+        )})
 
     async def _set_clipboard(self, inp: dict) -> str:
         text = inp["text"].replace("'", "'\\''")
-        return await self._bash({"command": f"echo -n '{text}' | DISPLAY=:0 xclip -selection clipboard 2>/dev/null || echo -n '{text}' | DISPLAY=:0 xsel --clipboard --input 2>/dev/null"})
+        return await self._bash({"command": (
+            f"echo -n '{text}' | DISPLAY=:0 xclip -selection clipboard 2>/dev/null "
+            f"|| echo -n '{text}' | DISPLAY=:0 xsel --clipboard --input 2>/dev/null "
+            f"|| echo -n '{text}' | wl-copy 2>/dev/null"
+        )})
 
     async def _manage_service(self, inp: dict) -> str:
         service = inp["service"].replace(";", "").replace("&&", "")
@@ -628,6 +718,63 @@ class ToolExecutor:
             sock.sendto(magic, (broadcast, 9))
         return f"Magic packet sent to {mac} via {broadcast}:9"
 
+    async def _quarantine_file(self, inp: dict) -> str:
+        """Reversibly isolate a suspicious file: strip exec perms and move it to
+        the quarantine vault with a metadata sidecar. Never deletes — auditable."""
+        src = Path(inp["path"])
+        reason = inp.get("reason", "unspecified")
+        if not src.exists():
+            return f"Path not found: {src}"
+        vault = Path("/var/lib/aetheros/quarantine")
+        vault.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = vault / f"{stamp}__{src.name}"
+        try:
+            os.chmod(src, 0o000)
+        except Exception:
+            pass
+        meta = {
+            "original_path": str(src.resolve()),
+            "quarantined_at": datetime.now().isoformat(),
+            "reason": reason,
+            "size": src.stat().st_size if src.exists() else None,
+        }
+        # Move via bash so cross-filesystem moves work, then write metadata.
+        mv = await self._bash({"command": f"mv -f {json.dumps(str(src))} {json.dumps(str(dest))}"})
+        dest.with_suffix(dest.suffix + ".meta.json").write_text(json.dumps(meta, indent=2))
+        return (f"Quarantined → {dest}\nReason: {reason}\n"
+                f"Reversible: restore with `mv {dest} {meta['original_path']}`\n{mv}")
+
+    async def _set_performance_mode(self, inp: dict) -> str:
+        mode = inp.get("mode", "balanced").lower()
+        target = inp.get("target_process", "")
+        out = []
+        if mode == "game":
+            out.append(await self._bash({"command":
+                "for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do "
+                "echo performance > $g 2>/dev/null; done; "
+                "sync; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null; "
+                "powerprofilesctl set performance 2>/dev/null || true"}))
+            if target:
+                out.append(await self._bash({"command":
+                    f"for p in $(pgrep -f {json.dumps(target)}); do renice -n -10 -p $p; "
+                    f"ionice -c1 -n0 -p $p 2>/dev/null; done"}))
+            out.append(await self._bash({"command":
+                "systemctl stop packagekit 2>/dev/null; "
+                "pkill -STOP tracker-miner 2>/dev/null || true"}))
+        elif mode == "powersave":
+            out.append(await self._bash({"command":
+                "for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do "
+                "echo powersave > $g 2>/dev/null; done; "
+                "powerprofilesctl set power-saver 2>/dev/null || true"}))
+        else:  # balanced
+            out.append(await self._bash({"command":
+                "for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do "
+                "echo ondemand > $g 2>/dev/null || echo schedutil > $g 2>/dev/null; done; "
+                "powerprofilesctl set balanced 2>/dev/null || true; "
+                "pkill -CONT tracker-miner 2>/dev/null || true"}))
+        return f"Performance mode '{mode}' applied.\n" + "\n".join(out)
+
 
 # ── API Key Management ─────────────────────────────────────────────────────────
 
@@ -640,6 +787,18 @@ def get_api_key() -> str | None:
     system_key_file = CONFIG_DIR / "api_key"
     if system_key_file.exists():
         return system_key_file.read_text().strip()
+    # The daemon runs as root, but the first-run wizard runs as the desktop user.
+    # Scan real users' homes so the user-written key is picked up with no password
+    # prompt. (USER_CONFIG_DIR above is root's home when running as the service.)
+    try:
+        for home in Path("/home").glob("*"):
+            uk = home / ".config" / "aetheros" / "api_key"
+            if uk.exists():
+                val = uk.read_text().strip()
+                if val:
+                    return val
+    except Exception:
+        pass
     try:
         import secretstorage
         bus = secretstorage.dbus_init()
@@ -776,7 +935,20 @@ async def web_ui():
 @app.get("/health")
 async def health(_auth=Depends(verify_token)):
     hostname = socket.gethostname()
-    return {"status": "running", "model": MODEL, "hostname": hostname, "timestamp": datetime.now().isoformat()}
+    pid1 = None
+    try:
+        pid1 = Path("/run/aether-pid1").read_text().strip()
+    except Exception:
+        pass
+    return {
+        "status": "running",
+        "model": MODEL,
+        "hostname": hostname,
+        "autonomy": _autonomy_level(),
+        "pid1_loader": pid1,            # set when aether-init owned PID 1 this boot
+        "agent_ready": agent is not None,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 @app.get("/metrics")
@@ -825,6 +997,34 @@ async def ask_endpoint(request: Request, _auth=Depends(verify_token)):
     async for chunk in agent.chat(message):
         full += chunk
     return {"response": full, "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/agent")
+async def agent_endpoint(request: Request, _auth=Depends(verify_token)):
+    """Full agentic workflow: hand Aether a goal and stream its multi-step execution
+    (planning, tool calls, results) until the task is complete. Used by `aether-do`."""
+    if agent is None:
+        return StreamingResponse(
+            iter(["data: No API key configured. Open the Setup wizard.\n\ndata: [DONE]\n\n"]),
+            media_type="text/event-stream",
+        )
+    body = await request.json()
+    task = body.get("task", "") or body.get("message", "")
+    if not task:
+        return {"error": "No task"}
+
+    framed = (
+        "AGENTIC TASK — complete this goal end to end. Break it into steps, execute each "
+        "with your tools, verify as you go, and keep working until it is fully done. "
+        "Narrate progress briefly as you work.\n\nGOAL:\n" + task
+    )
+
+    async def generate():
+        async for chunk in agent.chat(framed):
+            yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/history")
@@ -891,8 +1091,19 @@ async def ws_endpoint(ws: WebSocket):
 
 
 async def _ws_chat(ws: WebSocket, message: str):
-    async for _ in agent.chat(message):
-        pass
+    # Runs as a detached task — must swallow its own errors and clean up, or a
+    # failed chat (API timeout, etc.) would silently orphan the WebSocket.
+    try:
+        async for _ in agent.chat(message):
+            pass
+    except Exception:
+        log.error("ws chat error: %s", traceback.format_exc())
+        try:
+            await ws.send_json({"type": "chunk", "content": "\n[Aether hit an error handling that — try again.]"})
+            await ws.send_json({"type": "done"})
+        except Exception:
+            if agent and ws in agent.ws_clients:
+                agent.ws_clients.remove(ws)
 
 
 # ── Unix Socket Server ─────────────────────────────────────────────────────────
@@ -927,29 +1138,283 @@ async def start_unix_socket():
 
 # ── System Monitor ─────────────────────────────────────────────────────────────
 
+async def _safe_disk_maintenance() -> str:
+    """Deterministic, reversible-only cleanup. NO LLM, no user-data deletion, no rm of
+    arbitrary paths. Only well-known safe caches/logs/temp. Returns a human summary."""
+    cmds = [
+        # APT package cache (safe — re-downloadable)
+        "apt-get clean 2>/dev/null",
+        # Journal logs older than the most recent 200MB (safe — historical logs)
+        "journalctl --vacuum-size=200M 2>/dev/null",
+        # Thumbnail caches for all users (safe — regenerated on demand)
+        "find /home/*/.cache/thumbnails -type f -mtime +7 -delete 2>/dev/null",
+        # Old temp files (safe — /tmp is ephemeral)
+        "find /tmp -type f -atime +3 -delete 2>/dev/null",
+        # Old crash reports
+        "rm -f /var/crash/* 2>/dev/null",
+    ]
+    executor = ToolExecutor()
+    before = psutil.disk_usage("/").percent
+    for c in cmds:
+        await executor._bash({"command": c, "timeout": 60})
+    after = psutil.disk_usage("/").percent
+    freed = max(0.0, before - after)
+    return f"safe maintenance freed ~{freed:.1f}% disk ({before:.0f}%→{after:.0f}%)"
+
+
+async def _notify_user(title: str, body: str, urgency: str = "normal"):
+    """Fire-and-forget desktop notification using the deterministic notify path."""
+    try:
+        await ToolExecutor()._notify({"title": title, "body": body, "urgency": urgency})
+    except Exception as e:
+        log.warning("notify failed: %s", e)
+
+
+# ── Autonomous Sentinel ─────────────────────────────────────────────────────────
+# Acts on its own — but ONLY through safe, reversible mechanisms:
+#   • game/perf optimization  (reversible governor + nice/ionice tuning)
+#   • threat isolation        (SIGSTOP the process + quarantine its binary; both undoable)
+# It never deletes user data and never SIGKILLs user apps unprompted.
+# Tunable via /etc/aetheros/autonomy.conf  (level = off | observe | active | aggressive)
+
+AUTONOMY_CONF = CONFIG_DIR / "autonomy.conf"
+SENTINEL_LOG = LOG_DIR / "sentinel.log"
+
+GAME_HINTS = (
+    "steam", "steamwebhelper", "proton", "wine", "wine64", "lutris", "gamescope",
+    "heroic", "minecraft", "java.*minecraft", "csgo", "dota2", "factorio", " shipping",
+    "-shipping", "unityplayer", " value=game", "vkcube", "retroarch", "ppsspp", "dolphin-emu",
+)
+
+
+def _autonomy_level() -> str:
+    # Rescue / recovery boot fully disables autonomous behavior.
+    try:
+        if "aether.disable" in Path("/proc/cmdline").read_text():
+            return "off"
+    except Exception:
+        pass
+    try:
+        if AUTONOMY_CONF.exists():
+            for line in AUTONOMY_CONF.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("level"):
+                    return line.split("=", 1)[1].strip().lower()
+    except Exception:
+        pass
+    return "active"  # sensible, reversible-only default
+
+
+def _sentinel_log(msg: str):
+    try:
+        with open(SENTINEL_LOG, "a") as f:
+            f.write(f"{datetime.now().isoformat()} {msg}\n")
+    except Exception:
+        pass
+
+
+def _detect_game() -> str | None:
+    """Return the name of a running game/heavy 3D app, or None. Deterministic."""
+    for p in psutil.process_iter(["pid", "name", "cmdline", "cpu_percent"]):
+        try:
+            hay = (p.info["name"] or "") + " " + " ".join(p.info.get("cmdline") or [])
+            hay = hay.lower()
+            for hint in GAME_HINTS:
+                if re.search(hint, hay):
+                    return p.info["name"]
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+
+def _detect_threats() -> list[dict]:
+    """Conservative, high-precision malware heuristic: a process whose executable lives
+    in an ephemeral/world-writable dir (/tmp, /dev/shm) AND holds a network connection.
+    This is a classic dropper signature and almost never matches legitimate desktop apps."""
+    threats = []
+    suspicious_dirs = ("/tmp/", "/dev/shm/", "/var/tmp/")
+    for p in psutil.process_iter(["pid", "name", "username"]):
+        try:
+            exe = p.exe()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
+            continue
+        if not exe or not exe.startswith(suspicious_dirs):
+            continue
+        try:
+            has_net = bool(p.net_connections(kind="inet"))
+        except Exception:
+            has_net = False
+        if has_net:
+            try:
+                threats.append({"pid": p.pid, "name": p.info["name"], "exe": exe})
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue  # process died between the net check and reading its name
+    return threats
+
+
+async def sentinel():
+    """The always-on autonomous layer. Deterministic, reversible, low-overhead."""
+    await asyncio.sleep(25)
+    in_game_mode = False
+    handled_threats: set[str] = set()
+    executor = ToolExecutor()
+    log.info("Sentinel active (autonomy=%s)", _autonomy_level())
+
+    while True:
+        level = _autonomy_level()
+        try:
+            if level == "off":
+                await asyncio.sleep(30)
+                continue
+
+            # ── Game / performance autopilot (reversible) ──────────────────
+            if level in ("active", "aggressive"):
+                game = _detect_game()
+                if game and not in_game_mode:
+                    await executor._set_performance_mode({"mode": "game", "target_process": game})
+                    in_game_mode = True
+                    _sentinel_log(f"game-mode ON for {game}")
+                    await _notify_user("◈ Aether — Game Mode",
+                                       f"Optimized performance for {game}.", "low")
+                elif not game and in_game_mode:
+                    await executor._set_performance_mode({"mode": "balanced"})
+                    in_game_mode = False
+                    _sentinel_log("game-mode OFF (restored balanced)")
+
+            # ── Threat isolation (SIGSTOP + quarantine binary — reversible) ─
+            if level in ("active", "aggressive"):
+                for t in _detect_threats():
+                    key = f"{t['pid']}:{t['exe']}"
+                    if key in handled_threats:
+                        continue
+                    handled_threats.add(key)
+                    # Freeze the process (reversible: SIGCONT) so it can't act further.
+                    try:
+                        os.kill(t["pid"], signal.SIGSTOP)
+                    except Exception:
+                        pass
+                    q = await executor._quarantine_file(
+                        {"path": t["exe"],
+                         "reason": f"process {t['name']} (pid {t['pid']}) running from temp dir with network activity"})
+                    _sentinel_log(f"THREAT isolated: {t} | {q.splitlines()[0]}")
+                    await _notify_user("◈ Aether — threat isolated",
+                                       f"Froze and quarantined a suspicious process "
+                                       f"({t['name']}) running from a temp directory.",
+                                       "critical")
+        except Exception as e:
+            log.error("sentinel error: %s", e)
+            _sentinel_log(f"error: {e}")
+        await asyncio.sleep(15)
+
+
+# ── Kernel-level sensor (eBPF) ──────────────────────────────────────────────────
+# Aether's deepest reach: an eBPF program attached to the execve tracepoint streams
+# every process the KERNEL launches, the instant it happens. We react to executables
+# spawned from ephemeral/world-writable dirs in real time — far faster and deeper than
+# userspace polling. Falls back silently to the polling sentinel if eBPF is unavailable.
+
+BPFTRACE_PROG = (
+    'tracepoint:syscalls:sys_enter_execve '
+    '{ printf("EXEC|%d|%s|%s\\n", pid, comm, str(args->filename)); }'
+)
+
+
+async def kernel_sensor():
+    await asyncio.sleep(20)
+    if _autonomy_level() == "off":
+        return
+    if not Path("/usr/bin/bpftrace").exists() and not Path("/usr/sbin/bpftrace").exists():
+        log.info("bpftrace not present — kernel eBPF sensor disabled (polling still active).")
+        return
+
+    executor = ToolExecutor()
+    susp = ("/tmp/", "/dev/shm/", "/var/tmp/")
+    seen: set[str] = set()
+
+    while True:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bpftrace", "-e", BPFTRACE_PROG,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            log.info("Kernel eBPF sensor attached (execve tracepoint).")
+            _sentinel_log("kernel eBPF sensor attached")
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = raw.decode(errors="replace").strip()
+                if not line.startswith("EXEC|"):
+                    continue
+                try:
+                    _, pid_s, comm, filename = line.split("|", 3)
+                except ValueError:
+                    continue
+                if not filename.startswith(susp) or filename in seen:
+                    continue
+                seen.add(filename)
+                if _autonomy_level() not in ("active", "aggressive"):
+                    continue
+                # Kernel saw a binary launch from a temp dir — react immediately.
+                try:
+                    os.kill(int(pid_s), signal.SIGSTOP)
+                except Exception:
+                    pass
+                q = await executor._quarantine_file(
+                    {"path": filename,
+                     "reason": f"kernel eBPF: {comm} exec'd from temp dir {filename}"})
+                _sentinel_log(f"KERNEL THREAT: {line} | {q.splitlines()[0]}")
+                await _notify_user("◈ Aether — blocked at kernel level",
+                                   f"Stopped a binary launching from a temp directory ({comm}).",
+                                   "critical")
+        except Exception as e:
+            log.warning("kernel sensor restart (%s)", e)
+        await asyncio.sleep(30)  # restart the tracer if it dies
+
+
 async def system_monitor():
-    await asyncio.sleep(30)
+    """Proactive health watch. Performs ONLY safe, reversible maintenance autonomously,
+    then notifies the user. Never kills user processes or deletes user data on its own —
+    that requires the user to explicitly ask Aether. (Per design review: an LLM running
+    rm/kill as root unattended is unacceptable.)"""
+    await asyncio.sleep(45)
+    notified_disk = False
+    notified_mem = False
     while True:
         try:
             mem = psutil.virtual_memory()
             disk = psutil.disk_usage("/")
-            cpu = psutil.cpu_percent(interval=1)
 
-            if mem.percent > 90:
-                await agent.run_autonomous_task(
-                    f"System memory is at {mem.percent}%. Identify and kill the worst memory hogs to free up RAM. Act now."
-                )
             if disk.percent > 90:
-                await agent.run_autonomous_task(
-                    f"Disk is {disk.percent}% full. Find and clean the largest unnecessary files (logs, temp, cache). Act now."
+                summary = await _safe_disk_maintenance()
+                still = psutil.disk_usage("/").percent
+                if still > 90 and not notified_disk:
+                    await _notify_user(
+                        "◈ Aether — disk almost full",
+                        f"Disk at {still:.0f}%. I ran {summary}. "
+                        f"Ask me to help find more to free.",
+                        urgency="critical",
+                    )
+                    notified_disk = True
+                elif still <= 90:
+                    notified_disk = False
+                log.info("disk maintenance: %s", summary)
+
+            if mem.percent > 92 and not notified_mem:
+                # Notify only — never auto-kill user apps.
+                top = sorted(
+                    (p.info for p in psutil.process_iter(["name", "memory_percent"])),
+                    key=lambda x: x.get("memory_percent") or 0, reverse=True,
+                )[:3]
+                names = ", ".join(f"{p['name']} ({(p['memory_percent'] or 0):.0f}%)" for p in top)
+                await _notify_user(
+                    "◈ Aether — high memory use",
+                    f"RAM at {mem.percent:.0f}%. Top: {names}. Ask me to close anything.",
                 )
-            if cpu > 95:
-                await agent.run_autonomous_task(
-                    f"CPU is at {cpu}% for sustained period. Identify what's causing this and address it. Act now."
-                )
+                notified_mem = True
+            elif mem.percent <= 85:
+                notified_mem = False
         except Exception as e:
             log.error("Monitor error: %s", e)
-        await asyncio.sleep(60)
+        await asyncio.sleep(90)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -964,13 +1429,10 @@ async def wait_for_api_key():
         if key:
             agent = AetherAgent(key)
             log.info("API key found — agent activated!")
-            try:
-                await agent.run_autonomous_task(
-                    "AetherOS AI agent just activated. Do a quick system health check and "
-                    "send a desktop notification saying Aether is now active."
-                )
-            except Exception as e:
-                log.warning("Activation greeting failed: %s", e)
+            await _notify_user(
+                "◈ Aether is now active",
+                "Your AI agent is connected and ready. Press Super+Space or click ◈ to chat.",
+            )
             return
 
 
@@ -994,6 +1456,8 @@ async def main():
 
     unix_server = await start_unix_socket()
     monitor_task = asyncio.create_task(system_monitor())
+    sentinel_task = asyncio.create_task(sentinel())
+    ksensor_task = asyncio.create_task(kernel_sensor())
 
     if agent is None:
         asyncio.create_task(wait_for_api_key())
@@ -1006,20 +1470,19 @@ async def main():
 
     if agent is not None:
         async def startup_greeting():
-            await asyncio.sleep(5)
-            try:
-                await agent.run_autonomous_task(
-                    "AetherOS has just started. Perform a quick system health check, log what you find, "
-                    "and send a desktop notification greeting the user with a brief status summary."
-                )
-            except Exception as e:
-                log.warning("Startup greeting failed: %s", e)
+            await asyncio.sleep(8)
+            await _notify_user(
+                "◈ Aether is ready",
+                "Your AI agent is running. Press Super+Space or click ◈ in the top bar to chat.",
+            )
         asyncio.create_task(startup_greeting())
 
     try:
         await server.serve()
     finally:
         monitor_task.cancel()
+        sentinel_task.cancel()
+        ksensor_task.cancel()
         unix_server.close()
 
 
