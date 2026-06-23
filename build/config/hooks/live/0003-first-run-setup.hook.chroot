@@ -1,0 +1,333 @@
+#!/bin/bash
+# Hook: Install AetherOS first-run setup wizard
+set -euo pipefail
+
+echo "==> Installing first-run setup wizard..."
+
+cat > /opt/aether/first-run-setup.py << 'PYEOF'
+#!/usr/bin/env python3
+"""
+AetherOS First-Run Setup — Simple 2-step wizard.
+Step 1: Paste API key → activates AI
+Step 2: Shows remote URL + access token
+"""
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Gtk, Adw, GLib, Gdk
+import subprocess
+import sys
+import socket
+import webbrowser
+from pathlib import Path
+
+CONFIG_DIR = Path.home() / ".config" / "aetheros"
+KEY_FILE = CONFIG_DIR / "api_key"
+DONE_FILE = CONFIG_DIR / ".setup_complete"
+SYSTEM_TOKEN_FILE = Path("/etc/aetheros/web_token")
+
+if DONE_FILE.exists():
+    sys.exit(0)
+
+
+def get_local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
+def get_token() -> str:
+    if SYSTEM_TOKEN_FILE.exists():
+        return SYSTEM_TOKEN_FILE.read_text().strip()
+    return "(start Aether daemon first)"
+
+
+CSS = """
+window, .dialog { background: #0a0b14; }
+.hero { color: #818cf8; font-size: 56px; }
+.page-title { color: #e2e8f0; font-size: 22px; font-weight: bold; }
+.page-sub { color: rgba(226,232,240,0.55); font-size: 13px; }
+.step-label { color: rgba(226,232,240,0.4); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
+.key-entry { background: rgba(255,255,255,0.05); color: #e2e8f0; border: 1px solid rgba(129,140,248,0.25); border-radius: 10px; padding: 12px; font-family: monospace; font-size: 13px; }
+.key-entry:focus { border-color: #818cf8; }
+.primary-btn { background: #4f46e5; color: white; border-radius: 10px; padding: 12px 24px; font-size: 14px; font-weight: 600; }
+.primary-btn:hover { background: #6366f1; }
+.secondary-btn { color: #818cf8; background: transparent; border: 1px solid rgba(129,140,248,0.3); border-radius: 10px; padding: 10px 20px; }
+.link-btn { color: #818cf8; }
+.success { color: #22c55e; font-size: 13px; }
+.info-card { background: rgba(129,140,248,0.08); border: 1px solid rgba(129,140,248,0.2); border-radius: 12px; padding: 16px 20px; }
+.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #818cf8; }
+.copy-btn { color: #64748b; background: transparent; border: none; font-size: 16px; }
+.copy-btn:hover { color: #818cf8; }
+"""
+
+
+class SetupWindow(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app)
+        self.set_title("AetherOS Setup")
+        self.set_default_size(480, 560)
+        self.set_resizable(False)
+
+        provider = Gtk.CssProvider()
+        provider.load_from_string(CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
+        self.set_content(self.stack)
+
+        self.stack.add_named(self._build_page1(), "page1")
+        self.stack.add_named(self._build_page2(), "page2")
+
+    # ── Page 1: API Key ───────────────────────────────────────────────────────
+    def _build_page1(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_start(48); box.set_margin_end(48)
+        box.set_margin_top(48); box.set_margin_bottom(48)
+        box.set_valign(Gtk.Align.CENTER)
+
+        hero = Gtk.Label(label="◈")
+        hero.add_css_class("hero")
+        box.append(hero)
+
+        title = Gtk.Label(label="Welcome to AetherOS")
+        title.add_css_class("page-title")
+        title.set_margin_top(16)
+        box.append(title)
+
+        sub = Gtk.Label(label="Connect your Claude account to activate the AI agent.\nThis is your only step to get started.")
+        sub.add_css_class("page-sub")
+        sub.set_margin_top(8)
+        sub.set_justify(Gtk.Justification.CENTER)
+        box.append(sub)
+
+        # Step
+        step1 = Gtk.Label(label="GET YOUR API KEY")
+        step1.add_css_class("step-label")
+        step1.set_margin_top(40)
+        step1.set_xalign(0)
+        box.append(step1)
+
+        get_key_btn = Gtk.Button(label="Open console.anthropic.com/settings/keys →")
+        get_key_btn.add_css_class("link-btn")
+        get_key_btn.add_css_class("flat")
+        get_key_btn.set_halign(Gtk.Align.START)
+        get_key_btn.connect("clicked", lambda _: webbrowser.open("https://console.anthropic.com/settings/keys"))
+        box.append(get_key_btn)
+
+        step2 = Gtk.Label(label="PASTE YOUR API KEY")
+        step2.add_css_class("step-label")
+        step2.set_margin_top(24)
+        step2.set_xalign(0)
+        box.append(step2)
+
+        self.key_entry = Gtk.Entry()
+        self.key_entry.set_placeholder_text("sk-ant-api03-…")
+        self.key_entry.set_visibility(False)
+        self.key_entry.add_css_class("key-entry")
+        self.key_entry.set_margin_top(8)
+        self.key_entry.connect("changed", self._on_key_changed)
+        self.key_entry.connect("activate", self._on_activate)
+        box.append(self.key_entry)
+
+        show_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        show_row.set_margin_top(6)
+        show_key = Gtk.CheckButton(label="Show key")
+        show_key.connect("toggled", lambda b: self.key_entry.set_visibility(b.get_active()))
+        show_row.append(show_key)
+        box.append(show_row)
+
+        self.status_lbl = Gtk.Label(label="")
+        self.status_lbl.set_margin_top(10)
+        box.append(self.status_lbl)
+
+        self.activate_btn = Gtk.Button(label="Activate Aether AI →")
+        self.activate_btn.add_css_class("primary-btn")
+        self.activate_btn.set_sensitive(False)
+        self.activate_btn.set_margin_top(24)
+        self.activate_btn.connect("clicked", self._on_activate)
+        box.append(self.activate_btn)
+
+        note = Gtk.Label(label="Your key is stored locally at ~/.config/aetheros/api_key\nand never leaves your machine.")
+        note.add_css_class("page-sub")
+        note.set_margin_top(16)
+        note.set_justify(Gtk.Justification.CENTER)
+        box.append(note)
+
+        return box
+
+    def _on_key_changed(self, entry):
+        self.activate_btn.set_sensitive(entry.get_text().strip().startswith("sk-ant-"))
+
+    def _on_activate(self, _):
+        key = self.key_entry.get_text().strip()
+        if not key.startswith("sk-ant-"):
+            return
+        self.activate_btn.set_sensitive(False)
+        self.activate_btn.set_label("Saving…")
+
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        KEY_FILE.write_text(key)
+        KEY_FILE.chmod(0o600)
+
+        try:
+            subprocess.run(["systemctl", "restart", "claused"],
+                           check=True, timeout=10, capture_output=True)
+            GLib.timeout_add(1500, self._go_page2)
+        except Exception:
+            self.status_lbl.set_label("✓ Key saved. Start daemon: systemctl start claused")
+            GLib.timeout_add(2000, self._go_page2)
+
+    def _go_page2(self):
+        self.stack.set_visible_child_name("page2")
+        return False
+
+    # ── Page 2: Success + Remote UI info ─────────────────────────────────────
+    def _build_page2(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.set_margin_start(40); box.set_margin_end(40)
+        box.set_margin_top(48); box.set_margin_bottom(48)
+        box.set_valign(Gtk.Align.CENTER)
+
+        hero = Gtk.Label(label="✓")
+        hero.add_css_class("success")
+        hero.set_markup('<span font="48" foreground="#22c55e">✓</span>')
+        box.append(hero)
+
+        title = Gtk.Label(label="Aether is Active")
+        title.add_css_class("page-title")
+        title.set_margin_top(12)
+        box.append(title)
+
+        sub = Gtk.Label(label="Your AI agent is running in the background.\nHere's how to access it:")
+        sub.add_css_class("page-sub")
+        sub.set_margin_top(8)
+        sub.set_justify(Gtk.Justification.CENTER)
+        box.append(sub)
+
+        # Remote UI info
+        ip = get_local_ip()
+        remote_url = f"http://{ip}:7474"
+        token = get_token()
+
+        # URL card
+        url_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        url_card.add_css_class("info-card")
+        url_card.set_margin_top(28)
+
+        url_head = Gtk.Label(label="REMOTE ACCESS (phone/browser)")
+        url_head.add_css_class("step-label")
+        url_head.set_xalign(0)
+        url_card.append(url_head)
+
+        url_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        url_label = Gtk.Label(label=remote_url)
+        url_label.add_css_class("mono")
+        url_label.set_selectable(True)
+        url_row.append(url_label)
+        url_copy = Gtk.Button(label="⧉")
+        url_copy.add_css_class("copy-btn")
+        url_copy.connect("clicked", lambda _: self._copy(remote_url))
+        url_row.append(url_copy)
+        url_card.append(url_row)
+
+        token_head = Gtk.Label(label="ACCESS TOKEN")
+        token_head.add_css_class("step-label")
+        token_head.set_margin_top(10)
+        token_head.set_xalign(0)
+        url_card.append(token_head)
+
+        token_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        token_label = Gtk.Label(label=token[:40] + "…" if len(token) > 40 else token)
+        token_label.add_css_class("mono")
+        token_label.set_selectable(True)
+        token_row.append(token_label)
+        token_copy = Gtk.Button(label="⧉")
+        token_copy.add_css_class("copy-btn")
+        token_copy.connect("clicked", lambda _: self._copy(token))
+        token_row.append(token_copy)
+        url_card.append(token_row)
+
+        box.append(url_card)
+
+        # Terminal tip
+        tip_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        tip_card.add_css_class("info-card")
+        tip_card.set_margin_top(12)
+        tip_head = Gtk.Label(label="TERMINAL")
+        tip_head.add_css_class("step-label")
+        tip_head.set_xalign(0)
+        tip_card.append(tip_head)
+        tip_label = Gtk.Label(label="ask <anything>    —   AI in your terminal")
+        tip_label.add_css_class("mono")
+        tip_label.set_xalign(0)
+        tip_card.append(tip_label)
+        box.append(tip_card)
+
+        done_btn = Gtk.Button(label="Start using AetherOS")
+        done_btn.add_css_class("primary-btn")
+        done_btn.set_margin_top(28)
+        done_btn.connect("clicked", self._finish)
+        box.append(done_btn)
+
+        self._copy_msg = Gtk.Label(label="")
+        self._copy_msg.add_css_class("page-sub")
+        self._copy_msg.set_margin_top(8)
+        box.append(self._copy_msg)
+
+        return box
+
+    def _copy(self, text: str):
+        clipboard = Gdk.Display.get_default().get_clipboard()
+        clipboard.set(text)
+        self._copy_msg.set_label("Copied!")
+        GLib.timeout_add(1500, lambda: self._copy_msg.set_label("") or False)
+
+    def _finish(self, _):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        DONE_FILE.touch()
+        self.close()
+
+
+class SetupApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.aetheros.Setup")
+        self.connect("activate", lambda app: SetupWindow(app).present())
+
+
+if __name__ == "__main__":
+    app = SetupApp()
+    sys.exit(app.run(sys.argv))
+PYEOF
+
+chmod +x /opt/aether/first-run-setup.py
+
+# Desktop entry and autostart
+cat > /usr/share/applications/aether-setup.desktop << 'EOF'
+[Desktop Entry]
+Name=AetherOS Setup
+Comment=First-run setup for AetherOS AI
+Exec=/usr/bin/python3 /opt/aether/first-run-setup.py
+Icon=preferences-system
+Terminal=false
+Type=Application
+Categories=System;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3
+NoDisplay=true
+EOF
+
+mkdir -p /etc/skel/.config/autostart
+cp /usr/share/applications/aether-setup.desktop /etc/skel/.config/autostart/
+
+echo "==> First-run setup wizard installed."

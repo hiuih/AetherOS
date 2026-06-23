@@ -1,0 +1,367 @@
+#!/bin/bash
+# Hook: AetherOS Custom Visual Identity — Catppuccin Mocha Mauve
+set -euo pipefail
+
+echo "==> Setting up AetherOS visual identity..."
+
+# ── Install Catppuccin Mocha GTK + Shell theme (bundled in source) ────────────
+mkdir -p /usr/share/themes /usr/share/icons /usr/share/gnome-shell/theme
+
+THEME_SRC="/build/desktop/themes/catppuccin-mocha-mauve-standard+default"
+THEME_NAME="catppuccin-mocha-mauve"
+
+if [ -d "$THEME_SRC" ]; then
+    cp -r "$THEME_SRC" "/usr/share/themes/$THEME_NAME"
+    echo "  Catppuccin Mocha Mauve theme installed."
+
+    # Install GNOME Shell theme
+    if [ -d "$THEME_SRC/gnome-shell" ]; then
+        mkdir -p "/usr/share/themes/$THEME_NAME/gnome-shell"
+        cp -r "$THEME_SRC/gnome-shell/"* "/usr/share/themes/$THEME_NAME/gnome-shell/"
+        echo "  GNOME Shell theme installed."
+    fi
+else
+    echo "  WARNING: Catppuccin theme source not found, using fallback."
+    THEME_NAME="Adwaita-dark"
+fi
+
+# ── Custom wallpaper — vibrant space/nebula aesthetic ────────────────────────
+echo "  Generating vibrant wallpaper..."
+/opt/aether/venv/bin/python3 << 'PYEOF'
+from PIL import Image, ImageDraw, ImageFilter
+import math, random
+
+random.seed(7474)
+W, H = 3840, 2160
+img = Image.new("RGB", (W, H), (8, 6, 18))
+draw = ImageDraw.Draw(img)
+
+# Base gradient — deep purple-to-navy
+for y in range(H):
+    t = y / H
+    r = int(8 + t * 12)
+    g = int(6 + t * 10)
+    b = int(18 + t * 22)
+    draw.line([(0, y), (W, y)], fill=(r, g, b))
+
+img = img.convert("RGBA")
+
+# Nebula color blobs — vivid purple/pink/blue/teal
+blobs = [
+    (W*0.12, H*0.20, 700, (160, 60, 255, 38)),   # bright purple
+    (W*0.88, H*0.80, 620, (40, 80, 255, 32)),    # electric blue
+    (W*0.50, H*0.45, 900, (120, 30, 200, 22)),   # deep violet
+    (W*0.75, H*0.15, 480, (200, 60, 160, 28)),   # hot pink
+    (W*0.25, H*0.85, 560, (20, 140, 255, 25)),   # cyan-blue
+    (W*0.60, H*0.75, 400, (80, 200, 180, 18)),   # teal
+    (W*0.35, H*0.30, 350, (255, 80, 120, 15)),   # rose
+]
+
+for bx, by, br, (cr, cg, cb, ca) in blobs:
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    for i in range(12):
+        fac = 1 - i / 12
+        alpha = int(ca * fac * 0.85)
+        r2 = int(br * fac)
+        od.ellipse([bx-r2, by-r2, bx+r2, by+r2], fill=(cr, cg, cb, alpha))
+    blurred = overlay.filter(ImageFilter.GaussianBlur(radius=100))
+    img = Image.alpha_composite(img, blurred)
+
+# Convert back for drawing
+img = img.convert("RGB")
+draw = ImageDraw.Draw(img)
+
+# Fine star field
+for _ in range(350):
+    px = random.randint(0, W)
+    py = random.randint(0, H)
+    brightness = random.randint(160, 255)
+    size = random.choices([0, 0, 1, 1, 1, 2], k=1)[0]
+    col = (brightness, brightness, min(255, brightness + random.randint(0, 60)))
+    draw.ellipse([px-size, py-size, px+size, py+size], fill=col)
+
+# Bright star clusters
+for _ in range(12):
+    px = random.randint(100, W-100)
+    py = random.randint(100, H-100)
+    draw.ellipse([px-2, py-2, px+2, py+2], fill=(255, 255, 255))
+    draw.ellipse([px-6, py-6, px+6, py+6], fill=(200, 180, 255, 60) if random.random()>0.5 else (180, 220, 255, 60))
+
+# Constellation lines
+points = [(random.randint(50, W-50), random.randint(50, H-50)) for _ in range(25)]
+for i, (px1, py1) in enumerate(points):
+    for px2, py2 in points[i+1:i+3]:
+        dist = math.sqrt((px2-px1)**2 + (py2-py1)**2)
+        if dist < 280:
+            alpha_val = int(50 * (1 - dist/280))
+            draw.line([(px1, py1), (px2, py2)], fill=(120, 100, 220), width=1)
+
+# ◈ center glyph with glow
+cx, cy = W//2, H//2
+# Glow rings
+for radius in [400, 320, 240, 160, 80]:
+    intensity = int(15 * (1 - radius/420))
+    draw.ellipse([cx-radius, cy-radius, cx+radius, cy+radius],
+                 outline=(180, 140, 255), width=1)
+
+# Diamond outline
+s = 90
+pts = [(cx, cy-s), (cx+s, cy), (cx, cy+s), (cx-s, cy)]
+draw.polygon(pts, outline=(203, 166, 247))
+si = 56
+pti = [(cx, cy-si), (cx+si, cy), (cx, cy+si), (cx-si, cy)]
+draw.polygon(pti, outline=(166, 140, 255))
+draw.line([(cx-s, cy), (cx+s, cy)], fill=(203, 166, 247), width=2)
+draw.line([(cx, cy-s), (cx, cy+s)], fill=(203, 166, 247), width=2)
+
+# AetherOS wordmark
+try:
+    from PIL import ImageFont
+    font_paths = [
+        "/usr/share/fonts/truetype/inter/Inter-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ]
+    font = None
+    for fp in font_paths:
+        try:
+            font = ImageFont.truetype(fp, 32)
+            break
+        except Exception:
+            pass
+
+    if font:
+        draw.text((W//2, H - 110), "AetherOS", fill=(160, 140, 220), anchor="mm", font=font)
+        small = ImageFont.truetype(fp, 18) if fp else font
+        draw.text((W//2, H - 74), "AI-NATIVE LINUX", fill=(100, 80, 160), anchor="mm", font=small)
+except Exception:
+    pass
+
+img.save("/usr/share/aetheros/wallpaper.png", "PNG", optimize=True)
+print("  Wallpaper generated: 3840x2160 nebula theme")
+PYEOF
+
+# ── System-wide dconf defaults (applies to ALL users automatically) ───────────
+# This is the right way to configure GNOME system-wide on Debian
+mkdir -p /etc/dconf/db/local.d /etc/dconf/profile
+
+cat > /etc/dconf/profile/user << 'EOF'
+user-db:user
+system-db:local
+EOF
+
+cat > /etc/dconf/db/local.d/01-aetheros << DCONF
+# AetherOS system-wide GNOME defaults
+
+[org/gnome/desktop/interface]
+gtk-theme='catppuccin-mocha-mauve'
+color-scheme='prefer-dark'
+icon-theme='Papirus-Dark'
+cursor-theme='Adwaita'
+cursor-size=24
+font-name='Inter 11'
+document-font-name='Inter 11'
+monospace-font-name='JetBrains Mono 11'
+enable-animations=true
+show-battery-percentage=true
+clock-show-weekday=true
+clock-show-seconds=false
+
+[org/gnome/desktop/wm/preferences]
+titlebar-font='Inter Bold 11'
+button-layout=':minimize,maximize,close'
+num-workspaces=4
+focus-mode='click'
+
+[org/gnome/desktop/wm/keybindings]
+switch-windows=['<Alt>Tab']
+switch-applications=['<Super>Tab']
+
+[org/gnome/desktop/background]
+picture-uri='file:///usr/share/aetheros/wallpaper.png'
+picture-uri-dark='file:///usr/share/aetheros/wallpaper.png'
+picture-options='zoom'
+primary-color='#0a0a12'
+
+[org/gnome/desktop/screensaver]
+picture-uri='file:///usr/share/aetheros/wallpaper.png'
+lock-delay=uint32 300
+
+[org/gnome/desktop/peripherals/touchpad]
+natural-scroll=true
+tap-to-click=true
+two-finger-scrolling-enabled=true
+speed=0.2
+
+[org/gnome/desktop/peripherals/mouse]
+natural-scroll=true
+speed=0.0
+
+[org/gnome/desktop/privacy]
+remember-recent-files=false
+remove-old-temp-files=true
+old-files-age=uint32 7
+
+[org/gnome/settings-daemon/plugins/color]
+night-light-enabled=true
+night-light-temperature=uint32 3500
+night-light-schedule-automatic=true
+
+[org/gnome/shell]
+enabled-extensions=['dash-to-dock@micxgx.gmail.com', 'ubuntu-appindicators@ubuntu.com', 'blur-my-shell@aunetx', 'tiling-assistant@leleat-on-github', 'aetheros@aetheros.os', 'user-theme@gnome-shell-extensions.gcampax.github.com']
+
+[org/gnome/shell/extensions/user-theme]
+name='catppuccin-mocha-mauve'
+favorite-apps=['chromium.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.TextEditor.desktop', 'org.gnome.SystemMonitor.desktop']
+
+[org/gnome/shell/extensions/dash-to-dock]
+dock-position='BOTTOM'
+extend-height=false
+dock-fixed=false
+autohide=true
+intellihide=true
+intellihide-mode='FOCUS_APPLICATION_WINDOWS'
+animation-time=0.15
+hide-delay=0.1
+show-delay=0.05
+transparency-mode='FIXED'
+background-opacity=0.75
+background-color='#1e1e2e'
+blur=false
+dash-max-icon-size=48
+icon-size-fixed=false
+show-favorites=true
+show-running=true
+show-apps-at-top=false
+show-trash=false
+show-mounts=false
+click-action='minimize-or-previews'
+scroll-action='cycle-windows'
+running-indicator-style='DOTS'
+custom-theme-shrink=true
+disable-overview-on-startup=true
+isolate-workspaces=false
+apply-custom-theme=false
+force-straight-corner=false
+
+[org/gnome/shell/extensions/blur-my-shell]
+sigma=20
+brightness=0.85
+
+[org/gnome/shell/extensions/blur-my-shell/panel]
+blur=true
+sigma=20
+brightness=0.85
+override-background=true
+override-background-dynamically=true
+
+[org/gnome/shell/extensions/blur-my-shell/overview]
+blur=true
+sigma=30
+brightness=0.7
+
+[org/gnome/shell/extensions/blur-my-shell/lockscreen]
+blur=true
+sigma=25
+brightness=0.7
+
+[org/gnome/shell/extensions/blur-my-shell/dash-to-dock]
+blur=true
+sigma=20
+brightness=0.8
+
+[org/gnome/shell/extensions/tiling-assistant]
+enable-tiling-popup=true
+tiling-popup-all-workspace=false
+window-gap=4
+
+[org/gnome/mutter]
+edge-tiling=true
+dynamic-workspaces=false
+workspaces-only-on-primary=true
+experimental-features=@as []
+
+[org/gnome/terminal/legacy]
+theme-variant='dark'
+
+[org/gnome/terminal/legacy/profiles:/:b1dcc9dd-5262-4d8d-a863-c897e6d979b9]
+background-color='#1e1e2e'
+foreground-color='#cdd6f4'
+palette=['#45475a', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de', '#585b70', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#a6adc8']
+use-theme-colors=false
+use-system-font=false
+font='JetBrains Mono 12'
+scrollback-unlimited=true
+audible-bell=false
+
+[org/gnome/shell/overrides]
+dynamic-workspaces=false
+DCONF
+
+# Update dconf database
+dconf update
+
+echo "  dconf system defaults applied."
+
+# ── Apply GTK4 libadwaita color override via settings.ini ─────────────────────
+mkdir -p /etc/skel/.config/gtk-4.0
+cat > /etc/skel/.config/gtk-4.0/gtk.css << 'GTK4CSS'
+/* AetherOS GTK4 custom colors — Catppuccin Mocha Mauve */
+@define-color accent_color #cba6f7;
+@define-color accent_bg_color #cba6f7;
+@define-color accent_fg_color #1e1e2e;
+GTK4CSS
+
+# Copy Catppuccin GTK4 assets for libadwaita apps
+if [ -d "/usr/share/themes/${THEME_NAME}/gtk-4.0" ]; then
+    mkdir -p /etc/skel/.config/gtk-4.0
+    cp -r "/usr/share/themes/${THEME_NAME}/gtk-4.0/"* /etc/skel/.config/gtk-4.0/ 2>/dev/null || true
+fi
+
+# ── GNOME Shell theme override CSS ────────────────────────────────────────────
+# We write the CSS to the user theme dir for the gnome-shell extension
+SHELL_THEME_DIR="/usr/share/themes/${THEME_NAME}"
+if [ -f "$SHELL_THEME_DIR/gnome-shell/gnome-shell.css" ]; then
+    # Append our AetherOS overrides on top of Catppuccin
+    cat >> "$SHELL_THEME_DIR/gnome-shell/gnome-shell.css" << 'EXTRA_CSS'
+
+/* AetherOS overrides */
+#panel {
+  background-color: rgba(30, 30, 46, 0.80) !important;
+  border-bottom: 1px solid rgba(203, 166, 247, 0.12) !important;
+}
+#panel .panel-button:hover,
+#panel .panel-button:active {
+  background-color: rgba(203, 166, 247, 0.12) !important;
+  border-radius: 8px;
+}
+EXTRA_CSS
+fi
+
+# ── Chromium default dark theme ───────────────────────────────────────────────
+mkdir -p /etc/chromium/policies/managed/
+cat > /etc/chromium/policies/managed/aetheros.json << 'CHROME'
+{
+  "DefaultSearchProviderEnabled": true,
+  "HomepageIsNewTabPage": true,
+  "NewTabPageLocation": "chrome-search://local-ntp/local-ntp.html",
+  "BackgroundModeEnabled": false,
+  "MetricsReportingEnabled": false,
+  "ChromeVariations": 1
+}
+CHROME
+
+# Set Chromium as default browser
+update-alternatives --set gnome-www-browser /usr/bin/chromium 2>/dev/null || true
+
+# ── GDM custom background ─────────────────────────────────────────────────────
+GDM_CSS="/usr/share/gnome-shell/gnome-shell-theme.gresource"
+# We'll use a simpler approach - set background via dconf for GDM too
+mkdir -p /etc/dconf/db/gdm.d
+cat > /etc/dconf/db/gdm.d/01-background << 'GDMDCONF'
+[org/gnome/login-screen]
+logo=''
+GDMDCONF
+dconf update 2>/dev/null || true
+
+echo "==> AetherOS visual identity complete."

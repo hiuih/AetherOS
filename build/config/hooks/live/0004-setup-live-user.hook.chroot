@@ -1,0 +1,35 @@
+#!/bin/bash
+# Hook: Create live user and configure GDM auto-login
+set -euo pipefail
+
+echo "==> Setting up live user..."
+
+# Create user if live-config hasn't done it yet
+if ! id user &>/dev/null; then
+    useradd -m -s /bin/bash user
+fi
+
+# Set password to 'live'
+echo "user:live" | chpasswd
+
+# Add to all relevant groups
+for grp in sudo audio video plugdev netdev cdrom dialout bluetooth; do
+    getent group "$grp" >/dev/null 2>&1 && usermod -aG "$grp" user || true
+done
+
+# Passwordless sudo for live session
+echo "user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/live-user
+chmod 440 /etc/sudoers.d/live-user
+
+# GDM auto-login
+mkdir -p /etc/gdm3
+cat > /etc/gdm3/custom.conf << 'EOF'
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=user
+TimedLoginEnable=true
+TimedLogin=user
+TimedLoginDelay=3
+EOF
+
+echo "==> Live user ready: user / live (auto-login enabled)"

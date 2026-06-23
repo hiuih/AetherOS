@@ -1,0 +1,132 @@
+#!/bin/bash
+# Hook: Install AetherOS AI Layer into the chroot
+set -euo pipefail
+
+echo "==> Installing AetherOS AI Layer..."
+
+# Create directories
+mkdir -p /opt/aether/{daemon,gui,cli,web,integrations}
+mkdir -p /etc/aetheros
+mkdir -p /var/log/aetheros
+mkdir -p /usr/share/aetheros
+
+# Copy AI core files
+if [ -d /build/ai-core ]; then
+    cp -r /build/ai-core/daemon/* /opt/aether/daemon/
+    cp -r /build/ai-core/gui/*    /opt/aether/gui/
+    cp -r /build/ai-core/cli/*    /opt/aether/cli/
+    [ -d /build/ai-core/web ] && cp -r /build/ai-core/web/* /opt/aether/web/
+    [ -d /build/ai-core/integrations ] && cp -r /build/ai-core/integrations/* /opt/aether/integrations/ 2>/dev/null || true
+fi
+
+# Install Python dependencies into a venv that can also see system packages (needed for gi/GTK4)
+python3 -m venv --system-site-packages /opt/aether/venv
+/opt/aether/venv/bin/pip install --no-input \
+    anthropic \
+    fastapi \
+    "uvicorn[standard]" \
+    websockets \
+    python-dotenv \
+    secretstorage \
+    psutil \
+    rich \
+    httpx \
+    aiofiles \
+    watchdog \
+    pyautogui \
+    pillow
+
+# Install CLI tools (wrapper scripts that use the venv)
+chmod +x /opt/aether/cli/ask
+
+cat > /usr/local/bin/ask << 'WRAPPER'
+#!/bin/bash
+exec /opt/aether/venv/bin/python3 /opt/aether/cli/ask "$@"
+WRAPPER
+chmod +x /usr/local/bin/ask
+
+cat > /usr/local/bin/aether << 'WRAPPER'
+#!/bin/bash
+exec /opt/aether/venv/bin/python3 /opt/aether/cli/ask "$@"
+WRAPPER
+chmod +x /usr/local/bin/aether
+
+# Install systemd service
+cp /opt/aether/daemon/claused.service /etc/systemd/system/claused.service
+systemctl enable claused
+
+# Install desktop entry
+cp /opt/aether/gui/aether-ui.desktop /usr/share/applications/
+
+# Install GNOME extension
+EXT_DIR="/usr/share/gnome-shell/extensions/aetheros@aetheros.os"
+mkdir -p "$EXT_DIR"
+if [ -d /build/desktop/gnome-extension ]; then
+    cp -r /build/desktop/gnome-extension/* "$EXT_DIR/"
+fi
+
+# Shell integration profile
+cat > /etc/profile.d/aether.sh << 'PROFILE'
+# AetherOS AI Shell Integration
+export AETHER_SOCKET="/run/claused.sock"
+export AETHER_URL="http://localhost:7474"
+
+# Quick AI command aliases
+alias ai='ask'
+alias why='ask "explain this error:"'
+
+# Auto-explain failed commands
+aether_command_not_found() {
+    echo "Command not found: $1"
+    if systemctl is-active --quiet claused 2>/dev/null; then
+        ask "command not found: $*  — what should I use instead and how? Answer in one line."
+    fi
+}
+export -f aether_command_not_found 2>/dev/null || true
+command_not_found_handle() { aether_command_not_found "$@"; }
+
+# Status in prompt
+__aether_status() {
+    if curl -sf http://localhost:7474/health >/dev/null 2>&1; then
+        echo -e "\e[35m◈\e[0m "
+    fi
+}
+export PS1="\$(__aether_status)\[\e[32m\]\u@aetheros\[\e[0m\]:\[\e[34m\]\w\[\e[0m\]\$ "
+PROFILE
+chmod 644 /etc/profile.d/aether.sh
+
+# Wallpaper (generate a simple dark gradient placeholder)
+/opt/aether/venv/bin/python3 - << 'PYEOF'
+from PIL import Image, ImageDraw, ImageFont
+import math
+
+w, h = 2560, 1440
+img = Image.new("RGB", (w, h))
+draw = ImageDraw.Draw(img)
+
+for y in range(h):
+    ratio = y / h
+    r = int(8 + ratio * 4)
+    g = int(8 + ratio * 4)
+    b = int(18 + ratio * 12)
+    draw.line([(0, y), (w, y)], fill=(r, g, b))
+
+# Draw grid lines (subtle)
+for x in range(0, w, 80):
+    draw.line([(x, 0), (x, h)], fill=(20, 20, 35), width=1)
+for y2 in range(0, h, 80):
+    draw.line([(0, y2), (w, y2)], fill=(20, 20, 35), width=1)
+
+# Draw center glyph
+cx, cy = w // 2, h // 2
+for r in [200, 160, 120, 80]:
+    opacity = int(255 * (1 - r/220) * 0.3)
+    draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(130, 140, 255, opacity), width=1)
+
+draw.text((cx, cy), "◈", fill=(100, 110, 200), anchor="mm")
+
+img.save("/usr/share/aetheros/wallpaper.png", "PNG")
+print("Wallpaper generated.")
+PYEOF
+
+echo "==> AetherOS AI Layer installed."

@@ -1,0 +1,479 @@
+#!/bin/bash
+# Hook: AetherOS Deep AI Integrations
+# Nautilus scripts, clipboard watcher, GNOME search provider, shell AI
+set -euo pipefail
+
+echo "==> Installing deep AI integrations..."
+
+# ── Nautilus AI Scripts (right-click menu) ────────────────────────────────────
+mkdir -p /etc/skel/.local/share/nautilus/scripts
+mkdir -p /usr/share/nautilus-scripts
+
+install_nautilus_script() {
+    local name="$1"
+    local file="/usr/share/nautilus-scripts/$name"
+    cat > "$file"
+    chmod +x "$file"
+    # Also put in skel so new users get them
+    ln -sf "$file" "/etc/skel/.local/share/nautilus/scripts/$name" 2>/dev/null || true
+}
+
+install_nautilus_script "Ask Aether about this" << 'SCRIPT'
+#!/bin/bash
+# Ask Aether to explain/analyze selected files
+FILES="$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+if [ -z "$FILES" ]; then exit 0; fi
+
+FIRST_FILE=$(echo "$FILES" | head -1)
+FILENAME=$(basename "$FIRST_FILE")
+
+# Build message
+MSG="The user right-clicked on these files in Nautilus: $FILES"
+MSG="$MSG — Please analyze them and tell the user what they are, what they do, and any insights."
+
+# Send to daemon
+RESULT=$(curl -s -X POST http://localhost:7474/ask \
+    -H "Content-Type: application/json" \
+    -d "{\"message\": \"$MSG\"}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('response','')[:800])" 2>/dev/null)
+
+# Show result in a dialog
+if command -v zenity &>/dev/null; then
+    zenity --info --title="◈ Aether Analysis" --text="$RESULT" --width=500 2>/dev/null || true
+else
+    notify-send "◈ Aether" "$RESULT" --urgency=normal
+fi
+SCRIPT
+
+install_nautilus_script "Summarize with Aether" << 'SCRIPT'
+#!/bin/bash
+FILES="$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+[ -z "$FILES" ] && exit 0
+FIRST=$(echo "$FILES" | head -1)
+
+if file "$FIRST" | grep -qi "text\|script\|source\|json\|xml\|yaml\|toml\|config"; then
+    CONTENT=$(head -c 3000 "$FIRST" 2>/dev/null)
+    MSG="Summarize this file in 3-5 bullet points. File: $FIRST\n\nContent:\n$CONTENT"
+else
+    MSG="Describe this file: $FIRST ($(du -sh "$FIRST" 2>/dev/null | cut -f1), $(file "$FIRST" | cut -d: -f2-))"
+fi
+
+RESULT=$(curl -s -X POST http://localhost:7474/ask \
+    -H "Content-Type: application/json" \
+    -d "{\"message\": $(echo "$MSG" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('response','')[:800])" 2>/dev/null)
+
+if command -v zenity &>/dev/null; then
+    zenity --info --title="◈ Aether Summary" --text="$RESULT" --width=500 2>/dev/null || true
+else
+    notify-send "◈ Aether Summary" "$RESULT"
+fi
+SCRIPT
+
+install_nautilus_script "Fix permissions with Aether" << 'SCRIPT'
+#!/bin/bash
+FILES="$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+[ -z "$FILES" ] && exit 0
+
+MSG="Fix the permissions on these files so they work correctly. Files: $FILES — Analyze what they are (script, config, binary, etc.) and set the right permissions."
+curl -s -X POST http://localhost:7474/ask \
+    -H "Content-Type: application/json" \
+    -d "{\"message\": \"$MSG\"}" >/dev/null &
+notify-send "◈ Aether" "Fixing permissions for: $(basename $FILES)…" --urgency=low
+SCRIPT
+
+install_nautilus_script "Open terminal here with AI" << 'SCRIPT'
+#!/bin/bash
+DIR="$NAUTILUS_SCRIPT_CURRENT_URI"
+DIR="${DIR#file://}"
+[ -d "$DIR" ] || DIR="$HOME"
+
+# Open terminal with Aether context loaded
+gnome-terminal --working-directory="$DIR" -- bash -c "
+echo '◈ AetherOS AI Terminal'
+echo \"Working in: $DIR\"
+echo 'Type: ask <question> for AI help, or just use the terminal normally.'
+exec bash"
+SCRIPT
+
+# Ensure nautilus picks up scripts
+mkdir -p /etc/skel/.config/nautilus
+cat > /etc/skel/.config/nautilus/scripts-accels << 'EOF'
+; Nautilus scripts keyboard shortcuts
+(gtk_accel_path "<Nautilus-Scripts>/Ask Aether about this" "<Control><Alt>a")
+(gtk_accel_path "<Nautilus-Scripts>/Summarize with Aether" "<Control><Alt>s")
+EOF
+
+# ── Clipboard AI Watcher ──────────────────────────────────────────────────────
+cat > /opt/aether/daemon/clipboard_watcher.py << 'PEOF'
+#!/usr/bin/env python3
+"""
+AetherOS Clipboard Watcher
+Monitors clipboard and offers AI help when errors or code is detected.
+"""
+
+import subprocess
+import time
+import re
+import os
+import sys
+import json
+import httpx
+from pathlib import Path
+
+DAEMON_URL = "http://localhost:7474"
+CHECK_INTERVAL = 2.5
+DISPLAY = os.environ.get("DISPLAY", ":0")
+DBUS = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+
+_last_clipboard = ""
+_last_analyzed = ""
+_cooldown = 0
+
+
+def get_clipboard() -> str:
+    try:
+        result = subprocess.run(
+            ["xclip", "-selection", "clipboard", "-o"],
+            capture_output=True, text=True, timeout=2,
+            env={**os.environ, "DISPLAY": DISPLAY}
+        )
+        return result.stdout
+    except Exception:
+        return ""
+
+
+def looks_like_error(text: str) -> bool:
+    patterns = [
+        r"Traceback \(most recent call last\)",
+        r"Error:|Exception:|FATAL:|CRITICAL:",
+        r"segmentation fault",
+        r"error: command .* failed",
+        r"npm ERR!",
+        r"SyntaxError|TypeError|NameError|AttributeError|ImportError|RuntimeError",
+        r"FAILED\s+\[",
+        r"0x[0-9a-fA-F]{6,}.*fault",
+    ]
+    return any(re.search(p, text, re.IGNORECASE) for p in patterns)
+
+
+def looks_like_code(text: str) -> bool:
+    if len(text) < 50 or len(text) > 8000:
+        return False
+    patterns = [
+        r"def |class |import |from .+ import",
+        r"function\s+\w+\s*\(",
+        r"const |let |var |=>",
+        r"#include|int main|printf|cout",
+        r"\bpublic\b.*\bclass\b|\bprivate\b|\bprotected\b",
+    ]
+    return any(re.search(p, text) for p in patterns)
+
+
+def notify(title: str, body: str):
+    try:
+        env = {**os.environ, "DISPLAY": DISPLAY, "DBUS_SESSION_BUS_ADDRESS": DBUS}
+        subprocess.run(
+            ["notify-send", "--urgency=low", "--icon=dialog-information",
+             "--app-name=Aether", title, body[:200]],
+            env=env, timeout=3
+        )
+    except Exception:
+        pass
+
+
+def ask_aether(message: str):
+    try:
+        httpx.post(f"{DAEMON_URL}/ask",
+                   json={"message": message}, timeout=3)
+    except Exception:
+        pass
+
+
+def main():
+    global _last_clipboard, _last_analyzed, _cooldown
+    print("AetherOS Clipboard Watcher started", flush=True)
+
+    while True:
+        time.sleep(CHECK_INTERVAL)
+        _cooldown = max(0, _cooldown - 1)
+
+        clip = get_clipboard().strip()
+        if not clip or clip == _last_clipboard or len(clip) < 20:
+            continue
+
+        _last_clipboard = clip
+
+        if _cooldown > 0 or clip == _last_analyzed:
+            continue
+
+        if looks_like_error(clip):
+            _last_analyzed = clip
+            _cooldown = 20
+            notify("◈ Aether", "Error detected in clipboard. Analyzing...")
+            msg = f"The user copied this error to their clipboard. Analyze it, identify the cause, and provide a clear fix:\n\n{clip[:3000]}"
+            ask_aether(msg)
+
+        elif looks_like_code(clip) and len(clip) > 200:
+            _last_analyzed = clip
+            _cooldown = 30
+            notify("◈ Aether", "Code snippet detected. Use 'ask what did I copy?' to analyze.")
+
+
+if __name__ == "__main__":
+    main()
+PEOF
+chmod +x /opt/aether/daemon/clipboard_watcher.py
+
+# Systemd user service for clipboard watcher
+mkdir -p /usr/lib/systemd/user
+cat > /usr/lib/systemd/user/aether-clipboard.service << 'SVC'
+[Unit]
+Description=AetherOS Clipboard AI Watcher
+After=graphical-session.target claused.service
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/opt/aether/venv/bin/python3 /opt/aether/daemon/clipboard_watcher.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical-session.target
+SVC
+
+# Enable user service for the default user
+mkdir -p /etc/skel/.config/systemd/user/graphical-session.target.wants
+ln -sf /usr/lib/systemd/user/aether-clipboard.service \
+    /etc/skel/.config/systemd/user/graphical-session.target.wants/aether-clipboard.service
+
+# ── GNOME Search Provider ─────────────────────────────────────────────────────
+# Lets users type in Activities overview and get AI answers
+mkdir -p /usr/share/gnome-shell/search-providers
+
+cat > /usr/share/dbus-1/services/os.aetheros.SearchProvider.service << 'DBUS_SVC'
+[D-BUS Service]
+Name=os.aetheros.SearchProvider
+Exec=/opt/aether/venv/bin/python3 /opt/aether/daemon/search_provider.py
+DBUS_SVC
+
+cat > /opt/aether/daemon/search_provider.py << 'PEOF'
+#!/usr/bin/env python3
+"""
+AetherOS GNOME Shell Search Provider
+Integrates AI answers into GNOME Activities search.
+"""
+
+import dbus
+import dbus.service
+import dbus.mainloop.glib
+from gi.repository import GLib
+import httpx
+import threading
+import hashlib
+
+SEARCH_BUS_NAME = "os.aetheros.SearchProvider"
+SEARCH_PATH = "/os/aetheros/SearchProvider"
+
+class AetherSearchProvider(dbus.service.Object):
+    def __init__(self):
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SessionBus()
+        bus_name = dbus.service.BusName(SEARCH_BUS_NAME, bus)
+        super().__init__(bus_name, SEARCH_PATH)
+        self._results = {}
+        self._pending = {}
+
+    @dbus.service.method("org.gnome.Shell.SearchProvider2",
+                         in_signature="as", out_signature="as")
+    def GetInitialResultSet(self, terms):
+        query = " ".join(terms)
+        if len(query) < 4:
+            return []
+        key = hashlib.md5(query.encode()).hexdigest()[:8]
+        if key not in self._results:
+            self._results[key] = {"query": query, "answer": "Asking Aether…", "key": key}
+            threading.Thread(target=self._fetch, args=(key, query), daemon=True).start()
+        return [key]
+
+    @dbus.service.method("org.gnome.Shell.SearchProvider2",
+                         in_signature="asas", out_signature="as")
+    def GetSubsearchResultSet(self, previous_results, new_terms):
+        return self.GetInitialResultSet(new_terms)
+
+    @dbus.service.method("org.gnome.Shell.SearchProvider2",
+                         in_signature="as", out_signature="aa{sv}")
+    def GetResultMetas(self, ids):
+        metas = []
+        for key in ids:
+            if key in self._results:
+                r = self._results[key]
+                metas.append({
+                    "id": dbus.String(key),
+                    "name": dbus.String(f"◈ {r['answer'][:80]}"),
+                    "description": dbus.String(r["query"]),
+                    "gicon": dbus.String("dialog-question-symbolic"),
+                })
+        return metas
+
+    @dbus.service.method("org.gnome.Shell.SearchProvider2",
+                         in_signature="sasu", out_signature="")
+    def ActivateResult(self, identifier, terms, timestamp):
+        if identifier in self._results:
+            r = self._results[identifier]
+            import subprocess
+            subprocess.Popen(["notify-send", "◈ Aether", r["answer"][:500]])
+
+    @dbus.service.method("org.gnome.Shell.SearchProvider2",
+                         in_signature="asu", out_signature="")
+    def LaunchSearch(self, terms, timestamp):
+        pass
+
+    def _fetch(self, key, query):
+        try:
+            resp = httpx.post("http://localhost:7474/ask",
+                              json={"message": query + " — answer in one short paragraph"},
+                              timeout=8)
+            answer = resp.json().get("response", "")[:400]
+            if answer:
+                self._results[key]["answer"] = answer
+        except Exception:
+            self._results[key]["answer"] = "Aether is not running."
+
+if __name__ == "__main__":
+    provider = AetherSearchProvider()
+    GLib.MainLoop().run()
+PEOF
+chmod +x /opt/aether/daemon/search_provider.py
+
+# Register search provider with GNOME Shell
+cat > /usr/share/gnome-shell/search-providers/os.aetheros.SearchProvider.ini << 'INI'
+[Shell Search Provider]
+DesktopId=aether-ui.desktop
+BusName=os.aetheros.SearchProvider
+ObjectPath=/os/aetheros/SearchProvider
+Version=2
+INI
+
+# ── AI Shell Integration (enhanced) ──────────────────────────────────────────
+cat > /etc/profile.d/aether.sh << 'PROFILE'
+# AetherOS AI Shell Integration
+export AETHER_URL="http://localhost:7474"
+export AETHER_SOCKET="/run/claused.sock"
+
+# Core aliases
+alias ai='ask'
+alias a='ask'
+alias aether-status='curl -sf http://localhost:7474/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(f\"◈ Aether: {d['"'"'status'"'"']} | model: {d['"'"'model'"'"']}\")" 2>/dev/null || echo "◈ Aether: offline"'
+alias aether-log='tail -f /var/log/aetheros/claused.log'
+alias aether-actions='tail -20 /var/log/aetheros/actions.log | python3 -c "import sys,json; [print(f\"{json.loads(l)['"'"'ts'"'"'][-8:-3]} [{json.loads(l)['"'"'tool'"'"']}]\") for l in sys.stdin if l.strip()]" 2>/dev/null'
+alias explain='ask "explain this:"'
+alias fix='ask "fix this:"'
+
+# Command not found → ask AI
+command_not_found_handle() {
+    echo "Command not found: $1"
+    if curl -sf http://localhost:7474/health >/dev/null 2>&1; then
+        ask "The command '$*' was not found. What should I use instead? One line answer."
+    fi
+}
+
+# Exit code explanation
+__aether_check_exit() {
+    local code=$?
+    if [ $code -ne 0 ] && [ $code -ne 130 ] && [ -n "${LAST_CMD:-}" ]; then
+        echo -e "\e[90m◈ Exit $code | type 'fix' to get AI help\e[0m"
+    fi
+    LAST_CMD=""
+}
+
+__aether_store_cmd() { LAST_CMD="$BASH_COMMAND"; }
+trap '__aether_store_cmd' DEBUG
+PROMPT_COMMAND="__aether_check_exit;${PROMPT_COMMAND:-}"
+
+# Custom prompt with Aether indicator
+__aether_ps1() {
+    if curl -sf http://localhost:7474/health >/dev/null 2>&1; then
+        echo -e "\e[35m◈\e[0m "
+    fi
+}
+
+if [ -z "${ZSH_VERSION:-}" ]; then
+    export PS1='\[\e[90m\]$(__aether_ps1)\[\e[32m\]\u\[\e[0m\]@\[\e[36m\]aetheros\[\e[0m\]:\[\e[34m\]\w\[\e[0m\]\$ '
+fi
+
+# Quick fix: pipe to aether
+# Usage: cat error.log | aether-pipe "what's wrong?"
+aether-pipe() {
+    local question="${1:-analyze this}"
+    local content
+    content=$(cat)
+    ask "$question:\n$content"
+}
+export -f aether-pipe 2>/dev/null || true
+PROFILE
+
+# ── MOTD: show status and web token ──────────────────────────────────────────
+cat > /etc/update-motd.d/10-aetheros << 'MOTD'
+#!/bin/bash
+echo ""
+echo "  ◈  AetherOS"
+echo "  ─────────────────────────────────────────"
+if systemctl is-active --quiet claused 2>/dev/null; then
+    echo "  AI Agent:  ✓ Running (claude-sonnet-4-6)"
+else
+    echo "  AI Agent:  ✗ Not running — run: systemctl start claused"
+fi
+TOKEN_FILE="/etc/aetheros/web_token"
+if [ -f "$TOKEN_FILE" ]; then
+    TOKEN=$(cat "$TOKEN_FILE")
+    IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo "  Remote UI: http://$IP:7474"
+    echo "  Token:     $TOKEN"
+fi
+echo "  ─────────────────────────────────────────"
+echo "  Type 'ask <anything>' to use the AI"
+echo ""
+MOTD
+chmod +x /etc/update-motd.d/10-aetheros
+rm -f /etc/update-motd.d/10-uname 2>/dev/null || true
+
+# ── Keyboard Shortcuts for AI ─────────────────────────────────────────────────
+# These get applied via the theme setup script
+cat >> /usr/local/bin/aether-apply-theme << 'EOF'
+
+# AI keyboard shortcuts
+gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \
+    "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck0/',
+      '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck1/']"
+
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck0/ name 'Ask Aether'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck0/ command 'gnome-terminal -- bash -c "ask; read"'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck0/ binding '<Super>space'
+
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck1/ name 'Aether Screenshot Analysis'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck1/ command '/usr/local/bin/aether-screenshot-ask'
+gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/ck1/ binding '<Super>Print'
+EOF
+
+# Screenshot → AI analysis
+cat > /usr/local/bin/aether-screenshot-ask << 'SH'
+#!/bin/bash
+TMPFILE="/tmp/aether_screenshot_$(date +%s).png"
+sleep 0.3
+scrot "$TMPFILE" 2>/dev/null || import -window root "$TMPFILE" 2>/dev/null
+if [ -f "$TMPFILE" ]; then
+    notify-send "◈ Aether" "Analyzing screenshot…" --urgency=low
+    ask "I just took a screenshot of my screen (saved to $TMPFILE). Describe what you see, identify any issues, and give me actionable insights."
+    rm -f "$TMPFILE"
+fi
+SH
+chmod +x /usr/local/bin/aether-screenshot-ask
+
+# ── Install pip packages for integrations ─────────────────────────────────────
+/opt/aether/venv/bin/pip install --no-input \
+    dbus-python 2>/dev/null || \
+    apt-get install -y python3-dbus 2>/dev/null || true
+
+echo "==> Deep AI integrations installed."

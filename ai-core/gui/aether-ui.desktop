@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Aether AI
+Comment=AetherOS Autonomous AI Interface
+Exec=/opt/aether/venv/bin/python3 /opt/aether/gui/aether-ui.py
+Icon=aetheros
+Terminal=false
+Type=Application
+Categories=System;Utility;AI;
+Keywords=ai;claude;assistant;aether;
+StartupNotify=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3

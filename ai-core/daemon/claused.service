@@ -1,0 +1,36 @@
+[Unit]
+Description=AetherOS Claude AI Daemon
+Documentation=https://aetheros.ai
+After=network-online.target graphical.target dbus.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/opt/aether/venv/bin/python3 /opt/aether/daemon/claused.py
+Restart=always
+RestartSec=5
+
+# Run as root for full system access
+User=root
+Group=root
+
+# Environment
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+EnvironmentFile=-/etc/aetheros/environment
+EnvironmentFile=-/root/.config/aetheros/environment
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claused
+
+# No limits
+LimitNOFILE=infinity
+LimitNPROC=infinity
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,63 @@
+# AetherOS System Tools
+# Live system essentials (MUST be first)
+live-boot
+live-config
+live-config-systemd
+# Core system
+systemd
+sudo
+bash
+zsh
+fish
+vim
+nano
+htop
+btop
+curl
+wget
+git
+rsync
+zip
+unzip
+tar
+gzip
+bzip2
+xz-utils
+# Filesystem
+btrfs-progs
+e2fsprogs
+ntfs-3g
+exfatprogs
+fuse3
+# Hardware
+firmware-linux
+firmware-linux-nonfree
+firmware-misc-nonfree
+mesa-vulkan-drivers
+# Network
+openssh-server
+openssh-client
+nmap
+net-tools
+iputils-ping
+dnsutils
+# Developer tools
+build-essential
+cmake
+pkg-config
+python3-dev
+nodejs
+npm
+docker.io
+# Terminal multiplexer
+tmux
+# Security
+ufw
+fail2ban
+# Monitoring
+sysstat
+iotop
+nethogs
+# Media
+ffmpeg
+vlc

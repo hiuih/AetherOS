@@ -1,0 +1,28 @@
+#!/bin/bash
+# live-build auto config — called by lb config
+set -e
+
+ARCH="${1:-arm64}"   # arm64 or amd64
+MIRROR="http://deb.debian.org/debian"
+
+lb config noauto \
+    --architecture "${ARCH}" \
+    --distribution "trixie" \
+    --archive-areas "main contrib non-free non-free-firmware" \
+    --mirror-bootstrap "${MIRROR}" \
+    --mirror-chroot "${MIRROR}" \
+    --mirror-chroot-security "http://security.debian.org/debian-security" \
+    --mirror-binary "${MIRROR}" \
+    --mirror-binary-security "http://security.debian.org/debian-security" \
+    --binary-images iso-hybrid \
+    --bootloaders "grub-efi" \
+    --bootappend-live "boot=live components quiet splash" \
+    --debian-installer none \
+    --memtest none \
+    --win32-loader false \
+    --iso-volume "AetherOS" \
+    --iso-publisher "AetherOS Project" \
+    --iso-application "AetherOS AI-First Linux" \
+    --apt-recommends false \
+    --apt-indices false \
+    "${@}"

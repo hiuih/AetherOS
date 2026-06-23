@@ -1,0 +1,64 @@
+#!/bin/bash
+# Hook: Configure Calamares installer for AetherOS
+set -euo pipefail
+
+echo "==> Configuring Calamares installer..."
+
+# Copy settings
+mkdir -p /etc/calamares/branding/aetheros /etc/calamares/modules
+
+if [ -d /build/desktop/calamares ]; then
+    cp /build/desktop/calamares/settings.conf /etc/calamares/
+    cp -r /build/desktop/calamares/branding/aetheros/* /etc/calamares/branding/aetheros/
+    cp -r /build/desktop/calamares/modules/* /etc/calamares/modules/ 2>/dev/null || true
+fi
+
+# Generate a placeholder branding logo (simple PNG)
+/opt/aether/venv/bin/python3 << 'PYEOF'
+from PIL import Image, ImageDraw
+img = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+d = ImageDraw.Draw(img)
+cx, cy, s = 100, 100, 70
+# Diamond
+d.polygon([(cx, cy-s),(cx+s, cy),(cx, cy+s),(cx-s, cy)], outline=(129,140,248), fill=None)
+d.polygon([(cx, cy-s),(cx+s, cy),(cx, cy+s),(cx-s, cy)], outline=(129,140,248))
+s2 = 44
+d.polygon([(cx, cy-s2),(cx+s2, cy),(cx, cy+s2),(cx-s2, cy)], outline=(160,170,255))
+d.line([(cx-s, cy),(cx+s, cy)], fill=(129,140,248), width=3)
+d.line([(cx, cy-s),(cx, cy+s)], fill=(129,140,248), width=3)
+img.save("/etc/calamares/branding/aetheros/aetheros-logo.png", "PNG")
+
+# Welcome image
+welcome = Image.new("RGB", (800, 500), (10, 11, 20))
+wd = ImageDraw.Draw(welcome)
+for y in range(500):
+    t = y/500
+    r = int(10 + t*5); g = int(11 + t*4); b = int(20 + t*15)
+    wd.line([(0,y),(800,y)], fill=(r,g,b))
+for rx in [220,180,140,100,60]:
+    alpha = int(30*(1-rx/230))
+    wd.ellipse([400-rx,250-rx,400+rx,250+rx], outline=(129,140,248))
+wd.polygon([(400,180),(470,250),(400,320),(330,250)], outline=(129,140,248))
+welcome.save("/etc/calamares/branding/aetheros/aetheros-welcome.png", "PNG")
+print("Calamares branding images generated.")
+PYEOF
+
+# Desktop shortcut for installer
+cat > /usr/share/applications/calamares.desktop << 'EOF'
+[Desktop Entry]
+Name=Install AetherOS
+Comment=Install AetherOS to your hard drive
+Exec=pkexec calamares
+Icon=/etc/calamares/branding/aetheros/aetheros-logo.png
+Terminal=false
+Type=Application
+Categories=System;
+Keywords=install;installer;
+EOF
+
+# Put it on the desktop for the live user
+mkdir -p /etc/skel/Desktop
+cp /usr/share/applications/calamares.desktop /etc/skel/Desktop/
+chmod +x /etc/skel/Desktop/calamares.desktop
+
+echo "==> Calamares configured."

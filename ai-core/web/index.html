@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>AetherOS — Remote Control</title>
+<style>
+  :root {
+    --bg: #0a0b14;
+    --surface: #10111f;
+    --surface2: #161728;
+    --border: rgba(129,140,248,0.15);
+    --accent: #818cf8;
+    --accent2: #6366f1;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; font-size: 14px; overflow: hidden; }
+
+  /* ── Auth Screen ── */
+  #auth-screen {
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; background: var(--bg);
+  }
+  .auth-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 48px; width: 380px; text-align: center;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 80px rgba(99,102,241,0.08);
+  }
+  .auth-glyph { font-size: 56px; line-height: 1; margin-bottom: 16px; filter: drop-shadow(0 0 24px rgba(129,140,248,0.5)); }
+  .auth-title { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+  .auth-sub { color: var(--muted); font-size: 13px; margin-bottom: 32px; }
+  .auth-input {
+    width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+    border-radius: 10px; color: var(--text); font-size: 13px; padding: 12px 14px;
+    font-family: 'JetBrains Mono', monospace; outline: none; margin-bottom: 12px;
+    transition: border-color 0.2s;
+  }
+  .auth-input:focus { border-color: var(--accent); }
+  .auth-btn {
+    width: 100%; background: var(--accent2); color: white; border: none;
+    border-radius: 10px; padding: 12px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background 0.2s, transform 0.1s;
+  }
+  .auth-btn:hover { background: var(--accent); transform: translateY(-1px); }
+  .auth-btn:active { transform: translateY(0); }
+  .auth-error { color: var(--red); font-size: 12px; margin-top: 8px; min-height: 18px; }
+
+  /* ── Main Layout ── */
+  #app { display: none; height: 100vh; flex-direction: column; }
+  #app.visible { display: flex; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 20px; height: 52px; min-height: 52px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .topbar-logo { font-size: 22px; }
+  .topbar-title { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; }
+  .topbar-title span { color: var(--accent); }
+  .topbar-status { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+  .status-dot.busy { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .status-label { font-size: 12px; color: var(--muted); }
+  .topbar-host { font-size: 12px; color: var(--muted); padding: 3px 8px; background: rgba(255,255,255,0.05); border-radius: 6px; }
+
+  .main-area {
+    display: flex; flex: 1; overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 220px; min-width: 220px; background: var(--surface);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-section { padding: 16px; border-bottom: 1px solid var(--border); }
+  .sidebar-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; }
+  .metric { margin-bottom: 10px; }
+  .metric-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .metric-name { font-size: 12px; color: var(--muted); }
+  .metric-val { font-size: 12px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+  .bar-track { height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 2px; transition: width 1s; background: var(--accent); }
+  .bar-fill.warn { background: var(--amber); }
+  .bar-fill.danger { background: var(--red); }
+
+  .action-log { flex: 1; overflow-y: auto; padding: 12px; }
+  .action-entry {
+    padding: 8px 10px; border-radius: 8px; margin-bottom: 6px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05);
+    font-size: 11px;
+  }
+  .action-tool { color: var(--accent); font-weight: 600; font-family: monospace; }
+  .action-time { color: var(--muted); font-size: 10px; }
+  .action-preview { color: rgba(226,232,240,0.6); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── Chat Area ── */
+  .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .messages {
+    flex: 1; overflow-y: auto; padding: 20px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+  .msg { display: flex; gap: 12px; align-items: flex-start; }
+  .msg.user { flex-direction: row-reverse; }
+  .msg-avatar {
+    width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 16px; flex-shrink: 0;
+    background: var(--surface2); border: 1px solid var(--border);
+  }
+  .msg.user .msg-avatar { background: var(--accent2); border-color: var(--accent); }
+  .msg-bubble {
+    max-width: 75%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px 16px; line-height: 1.6;
+  }
+  .msg.user .msg-bubble { background: rgba(99,102,241,0.15); border-color: rgba(129,140,248,0.3); }
+  .msg-bubble pre { background: rgba(0,0,0,0.3); border-radius: 6px; padding: 8px 12px; margin: 8px 0; font-size: 12px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; }
+  .msg-bubble code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 3px; }
+
+  .tool-event {
+    margin: 4px 0 4px 44px; padding: 8px 12px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; font-size: 12px; display: flex; align-items: center; gap: 8px;
+  }
+  .tool-icon { width: 18px; height: 18px; border-radius: 4px; background: rgba(129,140,248,0.2); display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
+  .tool-name { color: var(--accent); font-family: monospace; font-weight: 600; }
+  .tool-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+
+  .typing { display: flex; align-items: center; gap: 4px; padding: 12px 16px; }
+  .typing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+  .welcome-msg {
+    text-align: center; padding: 48px 24px;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+  }
+  .welcome-glyph { font-size: 48px; filter: drop-shadow(0 0 32px rgba(129,140,248,0.6)); }
+  .welcome-title { font-size: 20px; font-weight: 700; }
+  .welcome-sub { color: var(--muted); font-size: 13px; max-width: 320px; line-height: 1.6; }
+  .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+  .quick-btn {
+    padding: 6px 14px; background: rgba(129,140,248,0.1); border: 1px solid rgba(129,140,248,0.2);
+    border-radius: 20px; color: var(--accent); font-size: 12px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .quick-btn:hover { background: rgba(129,140,248,0.2); transform: translateY(-1px); }
+
+  /* ── Input Area ── */
+  .input-area {
+    padding: 16px 20px; border-top: 1px solid var(--border);
+    background: var(--surface); display: flex; gap: 10px; align-items: flex-end;
+  }
+  .input-wrap { flex: 1; position: relative; }
+  #chat-input {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 12px; color: var(--text); font-size: 14px; padding: 12px 16px;
+    resize: none; outline: none; font-family: inherit; line-height: 1.5;
+    min-height: 46px; max-height: 140px; transition: border-color 0.2s;
+  }
+  #chat-input:focus { border-color: var(--accent); }
+  #chat-input::placeholder { color: var(--muted); }
+  .send-btn {
+    width: 46px; height: 46px; border-radius: 12px; background: var(--accent2);
+    border: none; color: white; cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s, transform 0.1s; flex-shrink: 0;
+  }
+  .send-btn:hover { background: var(--accent); transform: scale(1.05); }
+  .send-btn:active { transform: scale(0.97); }
+  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  /* ── WoL Modal ── */
+  .fab {
+    position: fixed; bottom: 88px; right: 20px;
+    width: 44px; height: 44px; border-radius: 12px;
+    background: rgba(129,140,248,0.15); border: 1px solid rgba(129,140,248,0.3);
+    color: var(--accent); font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s; z-index: 10;
+  }
+  .fab:hover { background: rgba(129,140,248,0.25); transform: scale(1.05); }
+
+  .modal-bg {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; width: 340px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+  }
+  .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+  .modal input {
+    width: 100%; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 13px; padding: 10px 12px;
+    font-family: monospace; outline: none; margin-bottom: 10px;
+  }
+  .modal input:focus { border-color: var(--accent); }
+  .modal-row { display: flex; gap: 8px; }
+  .modal-btn {
+    flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: rgba(255,255,255,0.05); color: var(--text); font-size: 13px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .modal-btn.primary { background: var(--accent2); border-color: var(--accent); color: white; }
+  .modal-btn:hover { filter: brightness(1.15); }
+
+  /* ── Animations ── */
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .msg, .tool-event { animation: fadeIn 0.25s ease-out; }
+
+  /* ── Mobile ── */
+  @media (max-width: 640px) {
+    .sidebar { display: none; }
+    .msg-bubble { max-width: 88%; }
+    .topbar-host { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Auth Screen -->
+<div id="auth-screen">
+  <div class="auth-card">
+    <div class="auth-glyph">◈</div>
+    <div class="auth-title">AetherOS Remote</div>
+    <div class="auth-sub">Enter your access token to connect</div>
+    <input type="password" class="auth-input" id="token-input" placeholder="aether-..." autocomplete="off">
+    <div class="auth-error" id="auth-error"></div>
+    <button class="auth-btn" id="auth-btn">Connect</button>
+    <div style="margin-top:14px;font-size:11px;color:var(--muted);">
+      Find your token: <code style="color:var(--accent)">cat /etc/aetheros/web_token</code>
+    </div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app">
+  <div class="topbar">
+    <span class="topbar-logo">◈</span>
+    <span class="topbar-title">Aether<span>OS</span></span>
+    <span class="topbar-host" id="topbar-host">connecting...</span>
+    <div class="topbar-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span class="status-label" id="status-label">connecting</span>
+    </div>
+  </div>
+
+  <div class="main-area">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <div class="metric">
+          <div class="metric-row"><span class="metric-name">CPU</span><span class="metric-val" id="cpu-val">—</span></div>
+          <div class="bar-track"><div class="bar-fill" id="cpu-bar" style="width:0%"></div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-row"><span class="metric-name">RAM</span><span class="metric-val" id="ram-val">—</span></div>
+          <div class="bar-track"><div class="bar-fill" id="ram-bar" style="width:0%"></div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-row"><span class="metric-name">Disk</span><span class="metric-val" id="disk-val">—</span></div>
+          <div class="bar-track"><div class="bar-fill" id="disk-bar" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div class="sidebar-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column;padding-bottom:0">
+        <div class="sidebar-label">Recent Actions</div>
+        <div class="action-log" id="action-log"></div>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div class="chat-area">
+      <div class="messages" id="messages">
+        <div class="welcome-msg" id="welcome">
+          <div class="welcome-glyph">◈</div>
+          <div class="welcome-title">Aether is ready</div>
+          <div class="welcome-sub">Your autonomous AI agent is running. Ask anything — it acts immediately with full system access.</div>
+          <div class="quick-actions">
+            <div class="quick-btn" onclick="sendQuick('What is the system status?')">System status</div>
+            <div class="quick-btn" onclick="sendQuick('Show me what processes are using the most resources')">Top processes</div>
+            <div class="quick-btn" onclick="sendQuick('Take a screenshot and describe what you see')">Screenshot</div>
+            <div class="quick-btn" onclick="sendQuick('Check for any errors in system logs')">System logs</div>
+            <div class="quick-btn" onclick="sendQuick('What files are taking up the most disk space?')">Disk usage</div>
+          </div>
+        </div>
+      </div>
+      <div class="input-area">
+        <div class="input-wrap">
+          <textarea id="chat-input" placeholder="Ask Aether anything…" rows="1"></textarea>
+        </div>
+        <button class="send-btn" id="send-btn" title="Send (Enter)">&#10148;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- WoL FAB -->
+<button class="fab" id="wol-fab" title="Wake on LAN" onclick="showWolModal()" style="display:none">⚡</button>
+
+<!-- WoL Modal -->
+<div class="modal-bg" id="wol-modal">
+  <div class="modal">
+    <h3>⚡ Wake on LAN</h3>
+    <input type="text" id="wol-mac" placeholder="MAC address (e.g. AA:BB:CC:DD:EE:FF)">
+    <input type="text" id="wol-broadcast" placeholder="Broadcast IP (e.g. 192.168.1.255)" value="255.255.255.255">
+    <div class="modal-row">
+      <button class="modal-btn" onclick="closeWolModal()">Cancel</button>
+      <button class="modal-btn primary" onclick="sendWol()">Send Magic Packet</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:10px" id="wol-result"></div>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.origin;
+let TOKEN = localStorage.getItem('aether_token') || '';
+let ws = null;
+let currentBubble = null;
+let isStreaming = false;
+
+// ── Auth ──────────────────────────────────────────────────────────────
+async function tryAuth(token) {
+  try {
+    const r = await fetch(`${BASE}/health`, { headers: { 'Authorization': `Bearer ${token}` } });
+    return r.ok;
+  } catch { return false; }
+}
+
+document.getElementById('auth-btn').onclick = async () => {
+  const token = document.getElementById('token-input').value.trim();
+  if (!token) return;
+  document.getElementById('auth-btn').textContent = 'Connecting…';
+  document.getElementById('auth-error').textContent = '';
+  if (await tryAuth(token)) {
+    TOKEN = token;
+    localStorage.setItem('aether_token', token);
+    showApp();
+  } else {
+    document.getElementById('auth-error').textContent = 'Invalid token or daemon not running.';
+    document.getElementById('auth-btn').textContent = 'Connect';
+  }
+};
+document.getElementById('token-input').onkeydown = e => { if (e.key === 'Enter') document.getElementById('auth-btn').click(); };
+
+// ── App Init ──────────────────────────────────────────────────────────
+async function showApp() {
+  document.getElementById('auth-screen').style.display = 'none';
+  document.getElementById('app').classList.add('visible');
+  document.getElementById('wol-fab').style.display = 'flex';
+  initWebSocket();
+  updateStatus();
+  setInterval(updateStatus, 8000);
+  loadActions();
+  setInterval(loadActions, 15000);
+}
+
+if (TOKEN) tryAuth(TOKEN).then(ok => { if (ok) showApp(); });
+
+// ── WebSocket ─────────────────────────────────────────────────────────
+function initWebSocket() {
+  const wsUrl = `${BASE.replace('http','ws')}/ws?token=${TOKEN}`;
+  ws = new WebSocket(wsUrl);
+  ws.onopen = () => setStatus('online', 'connected');
+  ws.onclose = () => { setStatus('offline', 'disconnected'); setTimeout(initWebSocket, 3000); };
+  ws.onerror = () => setStatus('error', 'error');
+  ws.onmessage = e => handleWsEvent(JSON.parse(e.data));
+}
+
+function handleWsEvent(evt) {
+  if (evt.type === 'chunk') {
+    appendChunk(evt.content);
+  } else if (evt.type === 'tool_start') {
+    appendToolEvent(evt.name, evt.input);
+    setStatus('busy', `running ${evt.name}`);
+  } else if (evt.type === 'tool_result') {
+    setStatus('online', 'connected');
+  } else if (evt.type === 'done') {
+    finalizeBubble();
+    isStreaming = false;
+    document.getElementById('send-btn').disabled = false;
+    setStatus('online', 'connected');
+    loadActions();
+  }
+}
+
+// ── Status & Metrics ──────────────────────────────────────────────────
+function setStatus(state, label) {
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot ' + state;
+  document.getElementById('status-label').textContent = label;
+}
+
+async function updateStatus() {
+  try {
+    const h = await fetch(`${BASE}/health`, { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if (!h.ok) { setStatus('', 'auth error'); return; }
+    const data = await h.json();
+    document.getElementById('topbar-host').textContent = data.hostname || 'aetheros';
+
+    const m = await fetch(`${BASE}/metrics`, { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if (!m.ok) return;
+    const metrics = await m.json();
+    const cpu = metrics.cpu_percent || 0;
+    const ram = metrics.memory?.percent || 0;
+    const disk = metrics.disk?.percent || 0;
+    document.getElementById('cpu-val').textContent = cpu.toFixed(0) + '%';
+    document.getElementById('ram-val').textContent = ram.toFixed(0) + '%';
+    document.getElementById('disk-val').textContent = disk.toFixed(0) + '%';
+    setBar('cpu-bar', cpu);
+    setBar('ram-bar', ram);
+    setBar('disk-bar', disk);
+    if (!isStreaming) setStatus('online', 'connected');
+  } catch { setStatus('', 'unreachable'); }
+}
+
+function setBar(id, pct) {
+  const el = document.getElementById(id);
+  el.style.width = pct + '%';
+  el.className = 'bar-fill' + (pct > 85 ? ' danger' : pct > 65 ? ' warn' : '');
+}
+
+async function loadActions() {
+  try {
+    const r = await fetch(`${BASE}/actions?limit=20`, { headers: { 'Authorization': `Bearer ${TOKEN}` } });
+    if (!r.ok) return;
+    const data = await r.json();
+    const log = document.getElementById('action-log');
+    log.innerHTML = '';
+    for (const a of (data.actions || []).reverse()) {
+      const el = document.createElement('div');
+      el.className = 'action-entry';
+      const t = new Date(a.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      el.innerHTML = `<div class="action-time">${t}</div><div class="action-tool">${a.tool}</div><div class="action-preview">${escapeHtml(String(a.result_preview || ''))}</div>`;
+      log.appendChild(el);
+    }
+  } catch {}
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────
+function sendQuick(msg) { document.getElementById('chat-input').value = msg; sendMessage(); }
+
+function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg || isStreaming || !ws || ws.readyState !== 1) return;
+  document.getElementById('welcome')?.remove();
+  input.value = '';
+  input.style.height = '';
+  isStreaming = true;
+  document.getElementById('send-btn').disabled = true;
+  setStatus('busy', 'thinking…');
+  appendUserMessage(msg);
+  startAssistantBubble();
+  ws.send(JSON.stringify({ type: 'chat', message: msg }));
+}
+
+document.getElementById('send-btn').onclick = sendMessage;
+document.getElementById('chat-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+document.getElementById('chat-input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+});
+
+function appendUserMessage(text) {
+  const msgs = document.getElementById('messages');
+  const msg = document.createElement('div');
+  msg.className = 'msg user';
+  msg.innerHTML = `<div class="msg-avatar">👤</div><div class="msg-bubble">${escapeHtml(text)}</div>`;
+  msgs.appendChild(msg);
+  scrollBottom();
+}
+
+function startAssistantBubble() {
+  const msgs = document.getElementById('messages');
+  const msg = document.createElement('div');
+  msg.className = 'msg';
+  msg.innerHTML = `<div class="msg-avatar">◈</div><div class="msg-bubble"><span class="typing"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></span></div>`;
+  msgs.appendChild(msg);
+  currentBubble = msg.querySelector('.msg-bubble');
+  currentBubble._raw = '';
+  scrollBottom();
+}
+
+function appendChunk(chunk) {
+  if (!currentBubble) startAssistantBubble();
+  currentBubble._raw += chunk;
+  currentBubble.innerHTML = renderMarkdown(currentBubble._raw);
+  scrollBottom();
+}
+
+function appendToolEvent(name, input) {
+  const msgs = document.getElementById('messages');
+  const icons = { bash:'$', read_file:'📄', write_file:'✏️', screenshot:'📷', http_request:'🌐', notify:'🔔', bash:'⚙️', kill_process:'☠️', system_info:'📊' };
+  const el = document.createElement('div');
+  el.className = 'tool-event';
+  const preview = JSON.stringify(input).slice(0, 60);
+  el.innerHTML = `<div class="tool-icon">${icons[name]||'⚙'}</div><span class="tool-name">${name}</span><span class="tool-detail">${escapeHtml(preview)}</span>`;
+  msgs.appendChild(el);
+  scrollBottom();
+}
+
+function finalizeBubble() { currentBubble = null; }
+function scrollBottom() { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; }
+
+// ── Markdown rendering (minimal) ──────────────────────────────────────
+function renderMarkdown(text) {
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/```([\s\S]*?)```/g, (_,c) => `<pre><code>${c}</code></pre>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br>');
+}
+function escapeHtml(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── WoL ──────────────────────────────────────────────────────────────
+function showWolModal() { document.getElementById('wol-modal').classList.add('show'); }
+function closeWolModal() { document.getElementById('wol-modal').classList.remove('show'); }
+async function sendWol() {
+  const mac = document.getElementById('wol-mac').value.trim();
+  const broadcast = document.getElementById('wol-broadcast').value.trim();
+  if (!mac) return;
+  document.getElementById('wol-result').textContent = 'Sending…';
+  try {
+    const r = await fetch(`${BASE}/wol`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mac, broadcast })
+    });
+    const d = await r.json();
+    document.getElementById('wol-result').textContent = d.status || d.error || 'Done';
+  } catch(e) { document.getElementById('wol-result').textContent = 'Error: ' + e; }
+}
+document.getElementById('wol-modal').onclick = e => { if (e.target === e.currentTarget) closeWolModal(); };
+</script>
+</body>
+</html>

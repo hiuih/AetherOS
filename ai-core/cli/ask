@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""
+AetherOS - ask
+CLI interface to the Aether AI daemon.
+
+Usage:
+  ask <question>
+  echo "error log" | ask what went wrong
+  ask -f file.py explain this code
+  ask -s          stream response token by token
+  ask --clear     clear conversation history
+  ask --history   show recent actions
+"""
+
+import argparse
+import json
+import os
+import select
+import socket
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+DAEMON_URL = "http://localhost:7474"
+SOCKET_PATH = "/run/claused.sock"
+
+
+def check_daemon() -> bool:
+    try:
+        urllib.request.urlopen(f"{DAEMON_URL}/health", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+def ask_via_http(message: str, stream: bool = False) -> str:
+    if stream:
+        req = urllib.request.Request(
+            f"{DAEMON_URL}/chat",
+            data=json.dumps({"message": message}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        full = ""
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                for line in resp:
+                    line = line.decode().strip()
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunk = json.loads(line[6:]).get("chunk", "")
+                        print(chunk, end="", flush=True)
+                        full += chunk
+            print()
+        except urllib.error.URLError as e:
+            print(f"[Error: {e}]", file=sys.stderr)
+        return full
+    else:
+        req = urllib.request.Request(
+            f"{DAEMON_URL}/ask",
+            data=json.dumps({"message": message}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                data = json.loads(resp.read())
+            return data.get("response", "")
+        except urllib.error.URLError as e:
+            return f"[Error: daemon unreachable — {e}]"
+
+
+def ask_via_socket(message: str) -> str:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(SOCKET_PATH)
+        sock.sendall(json.dumps({"message": message}).encode())
+        sock.shutdown(socket.SHUT_WR)
+        chunks = []
+        while True:
+            data = sock.recv(65536)
+            if not data:
+                break
+            chunks.append(data)
+        result = json.loads(b"".join(chunks))
+        return result.get("response", "")
+    finally:
+        sock.close()
+
+
+def print_history():
+    try:
+        with urllib.request.urlopen(f"{DAEMON_URL}/actions?limit=20", timeout=5) as resp:
+            data = json.loads(resp.read())
+        actions = data.get("actions", [])
+        if not actions:
+            print("No recent actions.")
+            return
+        for a in actions:
+            ts = a.get("ts", "")[:19]
+            tool = a.get("tool", "?")
+            inp = json.dumps(a.get("input", {}))[:60]
+            result = a.get("result_preview", "")[:80]
+            print(f"\033[2m{ts}\033[0m \033[36m{tool}\033[0m {inp}")
+            print(f"  \033[2m→ {result}\033[0m")
+    except Exception as e:
+        print(f"[Error: {e}]")
+
+
+def clear_history():
+    req = urllib.request.Request(f"{DAEMON_URL}/history", method="DELETE")
+    try:
+        urllib.request.urlopen(req, timeout=5)
+        print("Conversation cleared.")
+    except Exception as e:
+        print(f"[Error: {e}]")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="ask",
+        description="Talk to AetherOS AI from the command line",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("question", nargs="*", help="Question or task")
+    parser.add_argument("-f", "--file", help="Include file contents in the prompt")
+    parser.add_argument("-s", "--stream", action="store_true", help="Stream response token by token")
+    parser.add_argument("--clear", action="store_true", help="Clear conversation history")
+    parser.add_argument("--history", action="store_true", help="Show recent AI actions")
+    parser.add_argument("--raw", action="store_true", help="Print raw response without formatting")
+    args = parser.parse_args()
+
+    if args.history:
+        print_history()
+        return
+
+    if args.clear:
+        clear_history()
+        return
+
+    if not check_daemon():
+        print("\033[31m[claused not running]\033[0m Try: systemctl status claused", file=sys.stderr)
+        sys.exit(1)
+
+    parts = []
+
+    # Piped stdin
+    if not sys.stdin.isatty():
+        stdin_data = sys.stdin.read().strip()
+        if stdin_data:
+            parts.append(f"<stdin>\n{stdin_data}\n</stdin>")
+
+    # File attachment
+    if args.file:
+        file_path = Path(args.file)
+        if file_path.exists():
+            content = file_path.read_text(errors="replace")
+            parts.append(f"<file path='{file_path}'>\n{content}\n</file>")
+        else:
+            print(f"[File not found: {args.file}]", file=sys.stderr)
+
+    # Question
+    if args.question:
+        parts.append(" ".join(args.question))
+
+    if not parts:
+        parser.print_help()
+        sys.exit(1)
+
+    message = "\n\n".join(parts)
+
+    if args.stream:
+        ask_via_http(message, stream=True)
+    else:
+        response = ask_via_http(message)
+        if args.raw:
+            print(response)
+        else:
+            # Simple ANSI formatted output
+            print(f"\n\033[2m{'─' * 60}\033[0m")
+            print(f"\033[36mAether\033[0m  {response}")
+            print(f"\033[2m{'─' * 60}\033[0m\n")
+
+
+if __name__ == "__main__":
+    main()

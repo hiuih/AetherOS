@@ -1,0 +1,185 @@
+// AetherOS Plymouth Boot Splash
+// Dark AI aesthetic with animated ◈ glyph and progress ring
+
+// ── Palette ───────────────────────────────────────────────────────────────────
+bg_color.red   = 0.031; bg_color.green = 0.035; bg_color.blue = 0.078;
+accent.red     = 0.506; accent.green   = 0.549; accent.blue   = 0.973;
+text_color.red = 0.886; text_color.green = 0.910; text_color.blue = 0.941;
+dim.red        = 0.392; dim.green      = 0.451; dim.blue = 0.549;
+
+// ── Screen Setup ──────────────────────────────────────────────────────────────
+screen_width  = Window.GetWidth();
+screen_height = Window.GetHeight();
+cx = screen_width  / 2;
+cy = screen_height / 2;
+
+// ── Background ────────────────────────────────────────────────────────────────
+bg = Image(screen_width, screen_height);
+bg_ctx = bg.GetContext();
+bg_ctx.SetSourceRGB(bg_color.red, bg_color.green, bg_color.blue);
+bg_ctx.Rectangle(0, 0, screen_width, screen_height);
+bg_ctx.Fill();
+
+bg_sprite = Sprite();
+bg_sprite.SetImage(bg);
+bg_sprite.SetPosition(0, 0, -10);
+
+// ── Grid lines (subtle) ───────────────────────────────────────────────────────
+grid_img = Image(screen_width, screen_height);
+grid_ctx = grid_img.GetContext();
+grid_ctx.SetSourceRGBA(0.08, 0.09, 0.18, 0.6);
+
+step = 80;
+for (x = 0; x < screen_width; x += step) {
+    grid_ctx.SetLineWidth(0.5);
+    grid_ctx.MoveTo(x, 0); grid_ctx.LineTo(x, screen_height); grid_ctx.Stroke();
+}
+for (y = 0; y < screen_height; y += step) {
+    grid_ctx.MoveTo(0, y); grid_ctx.LineTo(screen_width, y); grid_ctx.Stroke();
+}
+
+grid_sprite = Sprite();
+grid_sprite.SetImage(grid_img);
+grid_sprite.SetPosition(0, 0, -9);
+
+// ── Glow rings ────────────────────────────────────────────────────────────────
+fun DrawRing(radius, alpha) {
+    img = Image(radius*2+4, radius*2+4);
+    ctx = img.GetContext();
+    ctx.SetSourceRGBA(accent.red, accent.green, accent.blue, alpha);
+    ctx.SetLineWidth(1.0);
+    ctx.Arc(radius+2, radius+2, radius, 0, Math.Pi*2);
+    ctx.Stroke();
+    return img;
+}
+
+ring1 = DrawRing(180, 0.08);
+ring2 = DrawRing(140, 0.12);
+ring3 = DrawRing(100, 0.18);
+ring4 = DrawRing(60,  0.25);
+
+ring1_s = Sprite(ring1); ring1_s.SetPosition(cx-182, cy-182, -5);
+ring2_s = Sprite(ring2); ring2_s.SetPosition(cx-142, cy-142, -5);
+ring3_s = Sprite(ring3); ring3_s.SetPosition(cx-102, cy-102, -5);
+ring4_s = Sprite(ring4); ring4_s.SetPosition(cx-62,  cy-62,  -5);
+
+// ── Diamond glyph (◈) ─────────────────────────────────────────────────────────
+fun DrawDiamond(size, line_width, alpha) {
+    canvas_size = size * 2 + 20;
+    img = Image(canvas_size, canvas_size);
+    ctx = img.GetContext();
+    ctx.SetSourceRGBA(accent.red, accent.green, accent.blue, alpha);
+    ctx.SetLineWidth(line_width);
+
+    half = canvas_size / 2;
+    // Outer diamond
+    ctx.MoveTo(half, half - size);
+    ctx.LineTo(half + size, half);
+    ctx.LineTo(half, half + size);
+    ctx.LineTo(half - size, half);
+    ctx.ClosePath(); ctx.Stroke();
+
+    // Inner diamond (smaller)
+    inner = size * 0.6;
+    ctx.MoveTo(half, half - inner);
+    ctx.LineTo(half + inner, half);
+    ctx.LineTo(half, half + inner);
+    ctx.LineTo(half - inner, half);
+    ctx.ClosePath(); ctx.Stroke();
+
+    // Cross lines
+    ctx.MoveTo(half - size, half); ctx.LineTo(half + size, half); ctx.Stroke();
+    ctx.MoveTo(half, half - size); ctx.LineTo(half, half + size); ctx.Stroke();
+
+    return img;
+}
+
+diamond_size = 52;
+diamond_img = DrawDiamond(diamond_size, 2.5, 1.0);
+diamond_sprite = Sprite(diamond_img);
+diamond_sprite.SetPosition(cx - diamond_size - 10, cy - diamond_size - 10, 0);
+
+// ── "AetherOS" text ───────────────────────────────────────────────────────────
+title_img = Image.Text("AetherOS", text_color.red, text_color.green, text_color.blue, 1, "Sans Bold 24");
+title_sprite = Sprite(title_img);
+title_sprite.SetPosition(cx - title_img.GetWidth()/2, cy + 100, 1);
+
+// Subtitle
+sub_img = Image.Text("Starting AI agent…", dim.red, dim.green, dim.blue, 1, "Sans 13");
+sub_sprite = Sprite(sub_img);
+sub_sprite.SetPosition(cx - sub_img.GetWidth()/2, cy + 136, 1);
+
+// ── Progress bar ──────────────────────────────────────────────────────────────
+bar_width  = 280;
+bar_height = 3;
+bar_x = cx - bar_width/2;
+bar_y = cy + 170;
+
+bar_bg_img = Image(bar_width, bar_height);
+bar_bg_ctx = bar_bg_img.GetContext();
+bar_bg_ctx.SetSourceRGBA(0.2, 0.22, 0.4, 0.5);
+bar_bg_ctx.Rectangle(0, 0, bar_width, bar_height);
+bar_bg_ctx.Fill();
+bar_bg_sprite = Sprite(bar_bg_img);
+bar_bg_sprite.SetPosition(bar_x, bar_y, 2);
+
+bar_fill_sprite = Sprite();
+bar_fill_sprite.SetPosition(bar_x, bar_y, 3);
+progress = 0;
+
+// ── Animation state ───────────────────────────────────────────────────────────
+frame = 0;
+pulse_dir = 1;
+pulse_alpha = 0.6;
+
+// ── Update loop ───────────────────────────────────────────────────────────────
+fun refresh() {
+    frame++;
+
+    // Pulse glow rings
+    pulse_alpha = pulse_alpha + pulse_dir * 0.008;
+    if (pulse_alpha >= 1.0) { pulse_dir = -1; }
+    if (pulse_alpha <= 0.3) { pulse_dir = 1; }
+
+    ring1_s.SetOpacity(pulse_alpha * 0.25);
+    ring2_s.SetOpacity(pulse_alpha * 0.40);
+    ring3_s.SetOpacity(pulse_alpha * 0.60);
+    ring4_s.SetOpacity(pulse_alpha * 0.80);
+    diamond_sprite.SetOpacity(0.7 + pulse_alpha * 0.3);
+
+    // Subtle scale animation on diamond
+    scale = 1.0 + Math.Sin(frame * 0.05) * 0.015;
+    diamond_sprite.SetPosition(
+        cx - (diamond_size + 10) * scale,
+        cy - (diamond_size + 10) * scale, 0);
+    diamond_sprite.SetScale(scale, scale);
+}
+
+Plymouth.SetRefreshFunction(refresh);
+
+// ── Progress updates ──────────────────────────────────────────────────────────
+fun progress_callback(duration, progress_val) {
+    progress = progress_val;
+    fill_w = Math.Int(bar_width * progress_val);
+
+    if (fill_w > 0) {
+        bar_fill_img = Image(fill_w, bar_height);
+        bar_fill_ctx = bar_fill_img.GetContext();
+        bar_fill_ctx.SetSourceRGBA(accent.red, accent.green, accent.blue, 0.9);
+        bar_fill_ctx.Rectangle(0, 0, fill_w, bar_height);
+        bar_fill_ctx.Fill();
+        bar_fill_sprite.SetImage(bar_fill_img);
+    }
+}
+Plymouth.SetBootProgressFunction(progress_callback);
+
+// ── Message display ───────────────────────────────────────────────────────────
+msg_sprite = Sprite();
+msg_sprite.SetPosition(cx, bar_y + 14, 4);
+
+fun message_callback(msg) {
+    msg_img = Image.Text(msg, dim.red, dim.green, dim.blue, 1, "Sans 11");
+    msg_sprite.SetImage(msg_img);
+    msg_sprite.SetPosition(cx - msg_img.GetWidth()/2, bar_y + 14, 4);
+}
+Plymouth.SetMessageFunction(message_callback);

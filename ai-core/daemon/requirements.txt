@@ -1,0 +1,16 @@
+anthropic>=0.40.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+websockets>=13.0
+python-dotenv>=1.0.0
+secretstorage>=3.3.3
+pydbus>=0.6.0
+pillow>=11.0.0
+pyautogui>=0.9.54
+xlib>=0.21
+psutil>=6.1.0
+rich>=13.9.0
+httpx>=0.27.0
+aiofiles>=24.1.0
+watchdog>=6.0.0
+pygobject>=3.50.0

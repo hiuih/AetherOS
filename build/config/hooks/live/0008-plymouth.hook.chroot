@@ -1,0 +1,38 @@
+#!/bin/bash
+# Hook: Install AetherOS Plymouth boot splash
+set -euo pipefail
+
+echo "==> Installing AetherOS Plymouth theme..."
+
+THEME_DIR="/usr/share/plymouth/themes/aetheros"
+mkdir -p "$THEME_DIR"
+
+# Copy theme files from build
+if [ -d /build/desktop/plymouth/aetheros ]; then
+    cp -r /build/desktop/plymouth/aetheros/* "$THEME_DIR/"
+else
+    echo "WARNING: Plymouth theme source not found at /build/desktop/plymouth/aetheros"
+fi
+
+# Set as default theme
+if command -v update-alternatives &>/dev/null; then
+    update-alternatives --install /usr/share/plymouth/themes/default.plymouth \
+        default.plymouth "$THEME_DIR/aetheros.plymouth" 100 2>/dev/null || true
+fi
+
+if command -v plymouth-set-default-theme &>/dev/null; then
+    plymouth-set-default-theme aetheros
+fi
+
+# Configure GRUB to enable splash
+if [ -f /etc/default/grub ]; then
+    # Add quiet splash to kernel parameters
+    sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"/' /etc/default/grub
+    # Set nice resolution
+    grep -q GRUB_GFXMODE /etc/default/grub || echo 'GRUB_GFXMODE=1920x1080' >> /etc/default/grub
+fi
+
+# Rebuild initramfs to include Plymouth
+update-initramfs -u -k all 2>/dev/null || true
+
+echo "==> Plymouth theme installed: aetheros"

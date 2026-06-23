@@ -1,0 +1,79 @@
+# AetherOS Desktop — GNOME stack
+gnome-core
+gnome-shell
+gnome-shell-extensions
+gnome-tweaks
+gnome-control-center
+gnome-terminal
+gnome-text-editor
+gnome-system-monitor
+gnome-disk-utility
+gnome-calculator
+gnome-calendar
+gnome-clocks
+gnome-screenshot
+nautilus
+eog
+evince
+file-roller
+# Browser
+chromium
+# Icons & Fonts
+adwaita-icon-theme
+papirus-icon-theme
+fonts-inter
+fonts-jetbrains-mono
+fonts-noto-color-emoji
+fonts-liberation
+fonts-open-sans
+fonts-firacode
+# Display Manager
+gdm3
+# Network
+network-manager
+network-manager-gnome
+# Audio
+pipewire
+pipewire-pulse
+pipewire-audio
+wireplumber
+pavucontrol
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
+gstreamer1.0-plugins-bad
+gstreamer1.0-libav
+# XDG
+xdg-utils
+xdg-user-dirs
+xdg-user-dirs-gtk
+dbus-x11
+at-spi2-core
+# GNOME Shell extensions
+gnome-shell-extension-dash-to-dock
+gnome-shell-extension-appindicator
+gnome-shell-extension-blur-my-shell
+gnome-shell-extension-tiling-assistant
+# Theme support
+gtk2-engines-murrine
+gtk2-engines-pixbuf
+libglib2.0-bin
+sassc
+# Clipboard & X tools for AI
+xclip
+xsel
+xdotool
+scrot
+imagemagick
+# Media
+celluloid
+rhythmbox
+# Installer
+calamares
+calamares-settings-debian
+# Boot splash
+plymouth
+plymouth-themes
+# WoL
+etherwake
+# Dev tools (light)
+neovim

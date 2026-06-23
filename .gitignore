@@ -1,0 +1,14 @@
+# Large build artifacts
+iso/*.iso
+iso/*.sha256
+# macOS
+.DS_Store
+**/.DS_Store
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+# Temp
+/tmp/
+*.tmp

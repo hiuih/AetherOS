@@ -1,0 +1,55 @@
+#!/bin/bash
+# Hook: Set AetherOS identity
+set -euo pipefail
+
+echo "==> Setting AetherOS identity..."
+
+cat > /etc/os-release << 'EOF'
+PRETTY_NAME="AetherOS 1.0"
+NAME="AetherOS"
+VERSION_ID="1.0"
+VERSION="1.0 (Trixie)"
+VERSION_CODENAME=trixie
+ID=aetheros
+ID_LIKE=debian
+HOME_URL="https://aetheros.os"
+SUPPORT_URL="https://aetheros.os/support"
+BUG_REPORT_URL="https://aetheros.os/bugs"
+PRIVACY_POLICY_URL="https://aetheros.os/privacy"
+LOGO=aetheros
+EOF
+
+cat > /etc/issue << 'EOF'
+
+  ◈  AetherOS 1.0  — AI-First Linux
+     Powered by Claude · Always Active
+
+EOF
+
+cat > /etc/motd << 'EOF'
+
+  ◈  Welcome to AetherOS
+  ─────────────────────────────────────────────────────
+  Your AI agent (Aether) is always running in the background.
+
+  Quick commands:
+    ask <anything>          — talk to your AI
+    ask -f file.py explain  — analyze a file
+    cat error.log | ask     — pipe any data to AI
+
+  GUI: Super+Space or click ◈ in the top bar
+  ─────────────────────────────────────────────────────
+
+EOF
+
+# Custom GDM greeting / login screen
+mkdir -p /etc/gdm3
+cat >> /etc/gdm3/greeter.dconf-defaults << 'EOF'
+[org/gnome/login-screen]
+banner-message-enable=true
+banner-message-text='◈ AetherOS — AI is always watching, always ready'
+logo='/usr/share/aetheros/logo.svg'
+disable-user-list=false
+EOF
+
+echo "==> OS identity set."

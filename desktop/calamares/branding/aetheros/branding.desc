@@ -1,0 +1,29 @@
+---
+componentName:  aetheros
+
+strings:
+    productName:        AetherOS
+    shortProductName:   AetherOS
+    version:            1.0
+    shortVersion:       1.0
+    versionedName:      AetherOS 1.0
+    shortVersionedName: AetherOS 1.0
+    bootloaderEntryName: AetherOS
+    productUrl:         https://aetheros.local
+    supportUrl:         https://aetheros.local/support
+    knownIssuesUrl:     https://aetheros.local/issues
+    releaseNotesUrl:    https://aetheros.local/release-notes
+
+images:
+    productLogo:        "aetheros-logo.png"
+    productIcon:        "aetheros-logo.png"
+    productWelcome:     "aetheros-welcome.png"
+
+slideshow:              "show.qml"
+slideshowAPI:           2
+
+style:
+    sidebarBackground:  "#0a0b14"
+    sidebarText:        "#e2e8f0"
+    sidebarTextSelect:  "#818cf8"
+    sidebarTextHighlight: "#6366f1"
