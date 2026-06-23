@@ -1,48 +1,45 @@
 #!/bin/bash
 # Hook: AetherOS GRUB theme — runs in binary stage, CWD = build dir
-set -euo pipefail
+# NOTE: no set -e here — binary hooks must not abort the whole build on soft failures
+set -uo pipefail
 
 echo "==> Applying AetherOS GRUB theme..."
 
-# Find all grub.cfg files on the ISO (EFI + legacy paths)
-GRUB_CFGS=""
-for p in \
-    "binary/boot/grub/grub.cfg" \
-    "binary/EFI/boot/grub.cfg" \
-    "binary/efi/boot/grub.cfg" \
-    "binary/boot/grub2/grub.cfg"
-do
-    [ -f "$p" ] && GRUB_CFGS="$GRUB_CFGS $p"
-done
+# Search broadly for any grub.cfg (arm64 EFI can put it in various spots)
+GRUB_CFGS=$(find . -name "grub.cfg" 2>/dev/null | grep -v chroot | tr '\n' ' ') || true
+GRUB_CFGS="${GRUB_CFGS# }"   # trim leading space
 
-if [ -z "$GRUB_CFGS" ]; then
-    echo "  WARNING: no grub.cfg found, searching..."
-    GRUB_CFGS=$(find binary -name "grub.cfg" 2>/dev/null | tr '\n' ' ')
+if [ -z "${GRUB_CFGS:-}" ]; then
+    echo "  WARNING: no grub.cfg found — skipping GRUB branding (non-fatal)."
+    echo "  Searched from: $(pwd)"
+    ls -la 2>/dev/null | head -10 || true
+    exit 0
 fi
 
-[ -z "$GRUB_CFGS" ] && echo "  WARNING: grub.cfg not found, skipping." && exit 0
+echo "  Found: $GRUB_CFGS"
 
-# Copy theme into ISO (includes.binary puts it there, but double-check)
+# Copy theme into ISO (includes.binary already handles this, but be explicit)
 THEME_SRC="config/includes.binary/boot/grub/themes/aetheros"
 if [ -d "$THEME_SRC" ]; then
     mkdir -p binary/boot/grub/themes/aetheros
-    cp -r "$THEME_SRC/"* binary/boot/grub/themes/aetheros/
+    cp -r "$THEME_SRC/"* binary/boot/grub/themes/aetheros/ 2>/dev/null || true
     echo "  GRUB theme copied to ISO."
 fi
 
 for CFG in $GRUB_CFGS; do
+    [ -f "$CFG" ] || continue
     echo "  Patching: $CFG"
 
-    # 1. Inject theme + gfxmode right after the loadfont block
+    # 1. Inject theme + gfxmode after loadfont block (only once)
     if ! grep -q "set theme=" "$CFG"; then
-        sed -i '/insmod gfxterm/a\\nset gfxmode=1920x1080,1280x800,auto\nset theme=/boot/grub/themes/aetheros/theme.txt\nexport theme' "$CFG"
+        sed -i '/insmod gfxterm/a\\nset gfxmode=1920x1080,1280x800,auto\nset theme=/boot/grub/themes/aetheros/theme.txt\nexport theme' "$CFG" || true
     fi
 
     # 2. Rename Debian branding → AetherOS
     sed -i \
         -e 's/Debian GNU\/Linux [0-9.]* (trixie)/AetherOS/g' \
         -e 's/Debian GNU\/Linux/AetherOS/g' \
-        "$CFG"
+        "$CFG" || true
 
     # 3. Rename live menu entries
     sed -i \
@@ -50,15 +47,15 @@ for CFG in $GRUB_CFGS; do
         -e 's/"Live system (arm64 fail-safe mode)"/"   Boot AetherOS (Safe Mode)"/g' \
         -e 's/"Live system"/"◈  Boot AetherOS"/g' \
         -e 's/"Live system (fail-safe mode)"/"   Boot AetherOS (Safe Mode)"/g' \
-        "$CFG"
+        "$CFG" || true
 
-    # 4. Add quiet splash for Plymouth (only if not already present)
+    # 4. Add quiet splash if missing
     if ! grep -q "quiet splash" "$CFG"; then
-        sed -i 's/boot=live components/boot=live components quiet splash/g' "$CFG"
+        sed -i 's/boot=live components/boot=live components quiet splash/g' "$CFG" || true
     fi
 
     # 5. Set timeout to 4 seconds
-    sed -i 's/^set timeout=.*/set timeout=4/' "$CFG"
+    sed -i 's/^set timeout=.*/set timeout=4/' "$CFG" || true
 
     echo "  Done: $CFG"
 done
