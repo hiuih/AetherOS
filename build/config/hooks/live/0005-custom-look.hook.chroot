@@ -296,6 +296,9 @@ audible-bell=false
 
 [org/gnome/shell/overrides]
 dynamic-workspaces=false
+
+[org/gnome/desktop/a11y/interface]
+reduce-animation=false
 DCONF
 
 # Update dconf database

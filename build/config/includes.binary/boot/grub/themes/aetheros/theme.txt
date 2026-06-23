@@ -1,0 +1,67 @@
+# AetherOS GRUB2 Theme — Catppuccin Mocha Mauve
+
+desktop-image: "background.png"
+desktop-color: "#080614"
+title-text: ""
+
+terminal-font: "Unknown Regular 12"
+terminal-left: "0%"
+terminal-top: "0%"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
+
+# ── AetherOS title ───────────────────────────────────────────────────────────
++ label {
+    top = 28%
+    left = 0
+    width = 100%
+    height = 40
+    text = "AetherOS"
+    font = "Unknown Regular 14"
+    color = "#cba6f7"
+    align = "center"
+}
+
++ label {
+    top = 33%
+    left = 0
+    width = 100%
+    height = 20
+    text = "AI-NATIVE LINUX"
+    font = "Unknown Regular 12"
+    color = "#6c5e8a"
+    align = "center"
+}
+
+# ── Boot menu ─────────────────────────────────────────────────────────────────
++ boot_menu {
+    left = 28%
+    top = 40%
+    width = 44%
+    height = 26%
+
+    item_font = "Unknown Regular 12"
+    item_color = "#cdd6f4"
+    selected_item_color = "#1e1e2e"
+    selected_item_bgcolor = "#cba6f7"
+
+    item_height = 32
+    item_padding = 12
+    item_spacing = 2
+
+    scrollbar = false
+    scrollbar_width = 0
+}
+
+# ── Hint bar ──────────────────────────────────────────────────────────────────
++ label {
+    top = 76%
+    left = 0
+    width = 100%
+    height = 18
+    text = "↵ boot    e  edit options    c  command line"
+    font = "Unknown Regular 10"
+    color = "#45475a"
+    align = "center"
+}

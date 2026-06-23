@@ -70,6 +70,9 @@ rhythmbox
 # Installer
 calamares
 calamares-settings-debian
+squashfs-tools
+grub-efi-arm64
+os-prober
 # Boot splash
 plymouth
 plymouth-themes
