@@ -146,8 +146,10 @@ if cc -O2 -static -o /sbin/aether-init "$BA/aether-init.c" 2>/dev/null \
 else
     log "WARNING: aether-init failed to compile — will boot normal systemd."
 fi
-# Reclaim space: the compiler was only needed to build aether-init.
-apt-get purge -y gcc libc6-dev 2>/dev/null && apt-get autoremove -y 2>/dev/null || true
+# NOTE: do NOT purge the compiler or run apt-get autoremove here. In this minimal
+# BASE-layer chroot, apt considers desktop packages (gdm3, ubuntu-desktop-minimal)
+# orphaned and removes them — which kills the login manager (black screen at boot).
+# Leave the image untrimmed.
 
 # Boot agent (deterministic, pre-systemd) + golden/LKG tooling
 install -m 0755 "$BA/aether-boot-stage1" /usr/lib/aether/aether-boot-stage1
@@ -414,19 +416,10 @@ chmod +x /etc/update-motd.d/10-aetheros
 # de-Ubuntu the motd
 rm -f /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news 2>/dev/null || true
 
-# ── 11. Slim the image ───────────────────────────────────────────────────────
-# The build toolchain (only needed to compile aether-init) and apt/pip caches add
-# hundreds of MB to the squashfs. Drop them now that aether-init is built.
-section "Slimming image"
-if [ -x /sbin/aether-init ] || [ -x /usr/sbin/aether-init ]; then
-    apt-get purge -y gcc libc6-dev cpp 2>/dev/null || true
-    apt-get autoremove -y --purge 2>/dev/null || true
-fi
-apt-get clean 2>/dev/null || true
-rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb 2>/dev/null || true
-rm -rf /root/.cache /tmp/* 2>/dev/null || true
-find / -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-log "image slimmed."
+# ── 11. No trimming ──────────────────────────────────────────────────────────
+# We deliberately do NOT slim/trim the image: package removal in this minimal
+# BASE-layer chroot makes apt delete desktop packages (gdm3 / ubuntu-desktop-*)
+# that it wrongly sees as orphaned, which breaks the login screen. Ship as-is.
 
 log "customization complete."
 echo ""
