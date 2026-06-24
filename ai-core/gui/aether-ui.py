@@ -16,7 +16,12 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Adw, GLib, Gdk, Pango, Gio
+from gi.repository import Gtk, Adw, GLib, Gdk, Pango, Gio, GObject
+
+
+def copy_text(text):
+    provider = Gdk.ContentProvider.new_for_value(GObject.Value(str, text or ""))
+    Gdk.Display.get_default().get_clipboard().set_content(provider)
 
 DAEMON = "http://localhost:7474"
 WS_URL = "ws://localhost:7474/ws"
@@ -41,8 +46,8 @@ CSS = """
 .aether-assistant { background: alpha(@card_bg_color, 0.55); border-radius: 16px 16px 16px 4px; }
 .aether-bubble { padding: 10px 14px; }
 .aether-role { font-size: 0.8em; font-weight: 700; }
-.aether-code { background: alpha(#000000, 0.30); border-radius: 10px; padding: 10px 12px;
-               font-family: 'JetBrains Mono', monospace; font-size: 0.92em; }
+.aether-code { background: alpha(#000000, 0.32); border-radius: 10px; padding: 6px 10px 10px 12px; }
+.code-text { font-family: 'JetBrains Mono', monospace; font-size: 0.92em; }
 .tool-card { background: alpha(@card_bg_color, 0.6); border-radius: 12px; padding: 6px 10px;
              border-left: 3px solid @accent_color; }
 .tool-name { font-weight: 700; font-size: 0.85em; }
@@ -185,7 +190,18 @@ class AetherWindow(Adw.ApplicationWindow):
         toolbar.set_content(content)
         self.set_content(toolbar)
 
+        # Esc closes the window (overlay feel) when the composer isn't focused.
+        esc = Gtk.EventControllerKey()
+        esc.connect("key-pressed", self._on_window_key)
+        self.add_controller(esc)
+
         self._welcome()
+
+    def _on_window_key(self, _c, keyval, _kc, _state):
+        if keyval == Gdk.KEY_Escape and not self.entry.has_focus():
+            self.close()
+            return True
+        return False
 
     def _quick_chips(self):
         scroll = Gtk.ScrolledWindow()
@@ -268,13 +284,31 @@ class AetherWindow(Adw.ApplicationWindow):
         for i, part in enumerate(parts):
             if not part.strip():
                 continue
-            if i % 2 == 1:  # code block (optionally first line is a language)
-                body = part.split("\n", 1)[1] if "\n" in part else part
-                row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-                row.append(self._text_label(body.rstrip(), code=True))
-                bubble.append(row)
+            if i % 2 == 1:  # code block (optional language on the first line)
+                lang, body = ("", part)
+                if "\n" in part:
+                    first, body = part.split("\n", 1)
+                    if first.strip() and " " not in first.strip():
+                        lang = first.strip()
+                bubble.append(self._code_block(body.rstrip("\n"), lang))
             else:
                 bubble.append(self._text_label(part.strip()))
+
+    def _code_block(self, code, lang=""):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.add_css_class("aether-code")
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        tag = Gtk.Label(label=lang or "code", xalign=0, hexpand=True)
+        tag.add_css_class("caption"); tag.add_css_class("dim")
+        copy = Gtk.Button(icon_name="edit-copy-symbolic", css_classes=["flat", "circular"])
+        copy.set_tooltip_text("Copy")
+        copy.connect("clicked", lambda *_: copy_text(code))
+        bar.append(tag); bar.append(copy)
+        lbl = Gtk.Label(label=code, xalign=0, selectable=True, wrap=True)
+        lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        lbl.add_css_class("code-text")
+        box.append(bar); box.append(lbl)
+        return box
 
     # ── events ────────────────────────────────────────────────────────────────
     def _welcome(self):

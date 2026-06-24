@@ -9,8 +9,10 @@ seconds — no restart or password prompt needed.
   setup.py --autostart show only if no key is configured yet (used at first login)
 """
 import os
+import json
 import socket
 import sys
+import threading
 from pathlib import Path
 
 import gi
@@ -163,6 +165,19 @@ class SetupWindow(Adw.ApplicationWindow):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         KEY_FILE.write_text(key)
         KEY_FILE.chmod(0o600)
+        # Also hand the key to the daemon, which (as root) persists it system-wide
+        # to /etc/aetheros/api_key and activates Aether immediately.
+        def notify_daemon():
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    "http://localhost:7474/config",
+                    data=json.dumps({"api_key": key}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                urllib.request.urlopen(req, timeout=8)
+            except Exception:
+                pass
+        threading.Thread(target=notify_daemon, daemon=True).start()
         # Remove the first-run autostart so the wizard won't nag again.
         try:
             (Path(os.path.expanduser("~/.config/autostart")) / "aether-firstrun.desktop").unlink()

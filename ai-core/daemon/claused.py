@@ -1117,6 +1117,14 @@ async def set_config(request: Request, _auth=Depends(verify_token)):
     key = body.get("api_key")
     if key and key.startswith("sk-ant-"):
         save_api_key(key)
+        # Persist system-wide (root-owned) so the key survives installs and works
+        # for every user + the root daemon — not just the home dir that set it.
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            (CONFIG_DIR / "api_key").write_text(key)
+            (CONFIG_DIR / "api_key").chmod(0o600)
+        except Exception as e:
+            log.warning("system-wide key save failed: %s", e)
         if agent is None:
             agent = AetherAgent(key)
         else:

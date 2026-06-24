@@ -13,14 +13,19 @@
 # ════════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-ISO_SRC="${ISO_SRC:-/cache/ubuntu-26.04-desktop-arm64.iso}"
+# Architecture: arm64 (default, native on Apple Silicon) or amd64 (for x86 PCs).
+# The casper/squashfs layout is identical across arches, so the only arch-specific
+# bits are the source ISO and the output name; aether-init compiles inside the
+# (arch-matched) chroot, so it's always built for the target.
+ARCH="${ARCH:-arm64}"
+ISO_SRC="${ISO_SRC:-/cache/ubuntu-26.04-desktop-${ARCH}.iso}"
 PAYLOAD="${PAYLOAD:-/payload}"
 OUTPUT="${OUTPUT:-/output}"
 WORK="/work"
 ISO_X="$WORK/iso"          # extracted ISO tree
 ROOTFS="$WORK/rootfs"      # stacked, editable root filesystem
 TS=$(date +%Y%m%d-%H%M)
-OUT_ISO="$OUTPUT/AetherOS-1.0-arm64-${TS}.iso"
+OUT_ISO="$OUTPUT/AetherOS-1.0-${ARCH}-${TS}.iso"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 step() { echo ""; echo "╔══ $* ══"; }
