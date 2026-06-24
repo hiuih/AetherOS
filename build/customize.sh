@@ -414,6 +414,20 @@ chmod +x /etc/update-motd.d/10-aetheros
 # de-Ubuntu the motd
 rm -f /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news 2>/dev/null || true
 
+# ── 11. Slim the image ───────────────────────────────────────────────────────
+# The build toolchain (only needed to compile aether-init) and apt/pip caches add
+# hundreds of MB to the squashfs. Drop them now that aether-init is built.
+section "Slimming image"
+if [ -x /sbin/aether-init ] || [ -x /usr/sbin/aether-init ]; then
+    apt-get purge -y gcc libc6-dev cpp 2>/dev/null || true
+    apt-get autoremove -y --purge 2>/dev/null || true
+fi
+apt-get clean 2>/dev/null || true
+rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb 2>/dev/null || true
+rm -rf /root/.cache /tmp/* 2>/dev/null || true
+find / -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+log "image slimmed."
+
 log "customization complete."
 echo ""
 echo "==> AetherOS chroot customization finished successfully."
