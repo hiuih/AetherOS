@@ -101,9 +101,14 @@ trap cleanup_mounts EXIT
 
 chroot "$ROOTFS" /bin/bash /customize.sh || die "chroot customization failed"
 
-# Cleanup payload + temp from the rootfs so it doesn't ship in the image
+# Cleanup payload + temp from the rootfs so it doesn't ship in the image.
 rm -rf "$ROOTFS/aether-payload" "$ROOTFS/customize.sh"
-rm -f  "$ROOTFS/etc/resolv.conf"
+# Restore the stock /etc/resolv.conf symlink (systemd-resolved). We replaced it
+# with a real file for the chroot's DNS; the SHIPPED image must have the symlink
+# back, or the installed system AND the installer's in-target `apt-get update`
+# (the "configuring apt" step) have no DNS and the install fails.
+rm -f "$ROOTFS/etc/resolv.conf"
+ln -sf ../run/systemd/resolve/stub-resolv.conf "$ROOTFS/etc/resolv.conf"
 cleanup_mounts
 trap - EXIT
 

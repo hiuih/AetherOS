@@ -49,11 +49,13 @@ echo "AetherOS 1.0 — \n \l" > /etc/issue.net
 section "Installing supporting packages via APT"
 # The live rootfs points apt at the install CD via a deb822 stanza in
 # /etc/apt/sources.list.d/cdrom.sources, which isn't present in our chroot and
-# makes `apt update` fail with "Malformed entry". Remove the cdrom source file
-# outright (sed corrupts the multi-line deb822 stanza); ubuntu.sources (the real
-# network mirror) remains and is used instead.
-rm -f /etc/apt/sources.list.d/cdrom.sources /etc/apt/sources.list.d/cdrom.list 2>/dev/null || true
-sed -i -e '/cdrom:/d' -e '\#file:/cdrom#d' /etc/apt/sources.list 2>/dev/null || true
+# makes `apt update` fail with "Malformed entry". MOVE it aside for the duration
+# of our build (don't delete it!) and RESTORE it at the end — the Ubuntu installer
+# needs cdrom.sources for its offline apt setup, and deleting it breaks the
+# "configuring apt" install step. ubuntu.sources (the network mirror) stays active.
+mkdir -p /var/tmp/aether-build
+[ -f /etc/apt/sources.list.d/cdrom.sources ] && \
+    mv /etc/apt/sources.list.d/cdrom.sources /var/tmp/aether-build/cdrom.sources || true
 apt-get update -y 2>/dev/null || log "apt update failed (continuing, may be offline-cached)"
 apt-get install -y --no-install-recommends \
     python3-venv python3-pip python3-gi python3-gi-cairo \
@@ -416,7 +418,12 @@ chmod +x /etc/update-motd.d/10-aetheros
 # de-Ubuntu the motd
 rm -f /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news 2>/dev/null || true
 
-# ── 11. No trimming ──────────────────────────────────────────────────────────
+# ── 11. Restore stock apt state; NO trimming ─────────────────────────────────
+# Put cdrom.sources back so the Ubuntu installer's offline apt setup works.
+[ -f /var/tmp/aether-build/cdrom.sources ] && \
+    mv /var/tmp/aether-build/cdrom.sources /etc/apt/sources.list.d/cdrom.sources || true
+rm -rf /var/tmp/aether-build 2>/dev/null || true
+
 # We deliberately do NOT slim/trim the image: package removal in this minimal
 # BASE-layer chroot makes apt delete desktop packages (gdm3 / ubuntu-desktop-*)
 # that it wrongly sees as orphaned, which breaks the login screen. Ship as-is.
