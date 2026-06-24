@@ -16,7 +16,7 @@ from pathlib import Path
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Gdk, GLib
+from gi.repository import Gtk, Adw, Gdk, GLib, GObject
 
 CONFIG_DIR = Path(os.path.expanduser("~/.config/aetheros"))
 KEY_FILE = CONFIG_DIR / "api_key"
@@ -151,7 +151,8 @@ class SetupWindow(Adw.ApplicationWindow):
 
     def _copy_btn(self, text):
         b = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER, css_classes=["flat"])
-        b.connect("clicked", lambda *_: Gdk.Display.get_default().get_clipboard().set(text))
+        b.connect("clicked", lambda *_: Gdk.Display.get_default().get_clipboard().set_content(
+            Gdk.ContentProvider.new_for_value(GObject.Value(str, text or ""))))
         return b
 
     def _save(self):

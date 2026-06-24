@@ -205,6 +205,50 @@ Categories=System;Settings;
 StartupNotify=true
 EOF
 
+# Aether chat app (Super+A also launches this)
+cat > /usr/share/applications/aether-ui.desktop << 'EOF'
+[Desktop Entry]
+Name=Aether
+GenericName=AI Assistant
+Comment=Chat with your system's AI — ask, code, or run a full task
+Exec=/opt/aether/venv/bin/python3 /opt/aether/gui/aether-ui.py
+Icon=aetheros
+Terminal=false
+Type=Application
+Categories=Utility;System;
+Keywords=ai;assistant;aether;claude;chat;
+StartupNotify=true
+EOF
+
+# Aether Settings — appears in the app grid under Settings/System
+cat > /usr/share/applications/aether-settings.desktop << 'EOF'
+[Desktop Entry]
+Name=Aether Settings
+Comment=Configure Aether — autonomy, model, API key, remote access
+Exec=/opt/aether/venv/bin/python3 /opt/aether/gui/aether-settings.py
+Icon=preferences-system
+Terminal=false
+Type=Application
+Categories=Settings;System;GTK;
+Keywords=aether;ai;autonomy;settings;
+StartupNotify=true
+EOF
+
+# ── GNOME Activities-search integration: "Ask Aether" from the overview ───────
+mkdir -p /usr/share/gnome-shell/search-providers /usr/share/dbus-1/services
+cat > /usr/share/gnome-shell/search-providers/aether-search.ini << 'EOF'
+[Shell Search Provider]
+DesktopId=aether-ui.desktop
+BusName=os.aetheros.SearchProvider
+ObjectPath=/os/aetheros/SearchProvider
+Version=2
+EOF
+cat > /usr/share/dbus-1/services/os.aetheros.SearchProvider.service << 'EOF'
+[D-Bus Service]
+Name=os.aetheros.SearchProvider
+Exec=/opt/aether/venv/bin/python3 /opt/aether/integrations/search_provider.py
+EOF
+
 # ── 6. Wallpaper — AetherOS nebula ───────────────────────────────────────────
 section "Generating AetherOS wallpaper"
 /opt/aether/venv/bin/python3 "$PAYLOAD/desktop/make-wallpaper.py" \

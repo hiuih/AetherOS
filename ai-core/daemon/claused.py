@@ -56,6 +56,13 @@ logging.basicConfig(
 log = logging.getLogger("claused")
 
 MODEL = "claude-sonnet-4-6"
+# Persisted model override (set via the Settings app / POST /config).
+try:
+    _mf = CONFIG_DIR / "model"
+    if _mf.exists() and _mf.read_text().strip():
+        MODEL = _mf.read_text().strip()
+except Exception:
+    pass
 MAX_TOKENS = 8192
 
 SYSTEM_PROMPT = """You are Aether — the AI agent built into AetherOS, an Ubuntu-based Linux system.
@@ -1046,6 +1053,76 @@ async def get_actions(limit: int = 50, _auth=Depends(verify_token)):
     lines = log_path.read_text().strip().split("\n")
     actions = [json.loads(l) for l in lines[-limit:] if l]
     return {"actions": actions}
+
+
+AVAILABLE_MODELS = [
+    {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "hint": "Balanced · recommended"},
+    {"id": "claude-opus-4-8", "name": "Claude Opus 4.8", "hint": "Most capable"},
+    {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5", "hint": "Fastest"},
+]
+MODEL_FILE = CONFIG_DIR / "model"
+AUTONOMY_OPTIONS = ["off", "observe", "active", "aggressive"]
+
+
+def _local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80)); ip = s.getsockname()[0]; s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
+@app.get("/config")
+async def get_config(_auth=Depends(verify_token)):
+    """Everything the Aether Settings app needs to render + the current state."""
+    pid1 = None
+    try:
+        pid1 = Path("/run/aether-pid1").read_text().strip()
+    except Exception:
+        pass
+    return {
+        "autonomy_level": _autonomy_level(),
+        "autonomy_options": AUTONOMY_OPTIONS,
+        "model": MODEL,
+        "available_models": AVAILABLE_MODELS,
+        "agent_ready": agent is not None,
+        "has_key": get_api_key() is not None,
+        "web_token": WEB_TOKEN,
+        "remote_url": f"http://{_local_ip()}:{API_PORT}",
+        "pid1_loader": pid1,
+        "hostname": socket.gethostname(),
+        "version": "1.0",
+    }
+
+
+@app.post("/config")
+async def set_config(request: Request, _auth=Depends(verify_token)):
+    """Update Aether settings. The daemon (root) owns /etc/aetheros, so the
+    user-space Settings GUI changes config by calling this localhost endpoint."""
+    global MODEL, agent
+    body = await request.json()
+    changed = {}
+    level = body.get("autonomy_level")
+    if level in AUTONOMY_OPTIONS:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        AUTONOMY_CONF.write_text(
+            f"# AetherOS autonomy level: {' | '.join(AUTONOMY_OPTIONS)}\nlevel = {level}\n")
+        changed["autonomy_level"] = level
+    model = body.get("model")
+    if model and any(m["id"] == model for m in AVAILABLE_MODELS):
+        MODEL_FILE.write_text(model)
+        MODEL = model
+        changed["model"] = model
+    key = body.get("api_key")
+    if key and key.startswith("sk-ant-"):
+        save_api_key(key)
+        if agent is None:
+            agent = AetherAgent(key)
+        else:
+            agent.client = anthropic.AsyncAnthropic(api_key=key)
+        changed["api_key"] = "updated"
+    return {"status": "ok", "changed": changed}
 
 
 @app.post("/wol")
