@@ -1241,7 +1241,10 @@ def _detect_threats() -> list[dict]:
         if not exe or not exe.startswith(suspicious_dirs):
             continue
         try:
-            has_net = bool(p.net_connections(kind="inet"))
+            # psutil renamed Process.connections() → net_connections() in 6.0;
+            # support both so threat detection works across versions.
+            conn_fn = getattr(p, "net_connections", None) or getattr(p, "connections", None)
+            has_net = bool(conn_fn(kind="inet")) if conn_fn else False
         except Exception:
             has_net = False
         if has_net:

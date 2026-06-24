@@ -133,6 +133,25 @@ if [ -f "$MAN" ]; then
     fi
 fi
 
+# Bump install-sources.yaml sizes so the installer's free-space estimate accounts
+# for the injected Aether layer (it injects into the base, so EVERY source grows).
+YAML="$CASPER/install-sources.yaml"
+if [ -f "$YAML" ]; then
+    NEW_MIN=$(du -sbx "$ROOTFS" 2>/dev/null | cut -f1)
+    mapfile -t SZ < <(grep -oE '^\s*size:\s*[0-9]+' "$YAML" | grep -oE '[0-9]+')
+    if [ -n "${NEW_MIN:-}" ] && [ "${#SZ[@]}" -ge 1 ]; then
+        OLD_MIN="${SZ[0]}"
+        DELTA=$(( NEW_MIN - OLD_MIN ))
+        sed -i "s/size: ${OLD_MIN}/size: ${NEW_MIN}/" "$YAML"
+        if [ "${#SZ[@]}" -ge 2 ]; then
+            OLD_FULL="${SZ[1]}"
+            sed -i "s/size: ${OLD_FULL}/size: $(( OLD_FULL + (DELTA > 0 ? DELTA : 0) ))/" "$YAML"
+        fi
+        CHANGED+=("$YAML")
+        echo "  install-sources.yaml sizes bumped (minimal: $OLD_MIN → $NEW_MIN)"
+    fi
+fi
+
 # ── 6. Regenerate md5sum.txt (skip boot catalog) ─────────────────────────────
 step "Regenerating md5sum.txt"
 if [ -f "$ISO_X/md5sum.txt" ]; then

@@ -65,7 +65,7 @@ apt-get install -y --no-install-recommends \
     fonts-jetbrains-mono fonts-inter \
     papirus-icon-theme gnome-shell-extensions sassc \
     plymouth plymouth-themes \
-    bpftrace nftables auditd linux-tools-generic \
+    bpftrace nftables auditd \
     2>/dev/null || log "some apt packages unavailable (continuing)"
 
 # ── 3. Install the Aether AI core ────────────────────────────────────────────
@@ -136,14 +136,18 @@ BA="$PAYLOAD/boot-agent"
 # Compile the PID 1 loader (tiny, dependency-free C). Static if possible.
 apt-get install -y --no-install-recommends gcc libc6-dev 2>/dev/null || log "gcc install failed"
 mkdir -p /usr/lib/aether
+AETHER_INIT_OK=0
 if cc -O2 -static -o /sbin/aether-init "$BA/aether-init.c" 2>/dev/null \
    || cc -O2 -o /sbin/aether-init "$BA/aether-init.c" 2>/dev/null; then
     chmod 0755 /sbin/aether-init
     cp -f /sbin/aether-init /usr/sbin/aether-init 2>/dev/null || true
+    AETHER_INIT_OK=1
     log "aether-init (PID 1 loader) compiled and installed."
 else
     log "WARNING: aether-init failed to compile — will boot normal systemd."
 fi
+# Reclaim space: the compiler was only needed to build aether-init.
+apt-get purge -y gcc libc6-dev 2>/dev/null && apt-get autoremove -y 2>/dev/null || true
 
 # Boot agent (deterministic, pre-systemd) + golden/LKG tooling
 install -m 0755 "$BA/aether-boot-stage1" /usr/lib/aether/aether-boot-stage1
@@ -157,15 +161,21 @@ ln -sf /etc/systemd/system/aether-lkg.service \
 # Use a /etc/default/grub.d drop-in (a NEW file) rather than editing /etc/default/grub,
 # so it survives the minimal.standard layer overlay on a full-desktop install.
 # Recovery mode uses GRUB_CMDLINE_LINUX (not _DEFAULT) → boots plain systemd = rescue.
-mkdir -p /etc/default/grub.d
-cat > /etc/default/grub.d/99-aether.cfg << 'EOF'
+# CRITICAL SAFETY: only point PID 1 at aether-init if the binary actually compiled.
+# Otherwise the kernel would panic on a missing init — so we leave boot 100% stock.
+if [ "$AETHER_INIT_OK" = 1 ] && [ -x /sbin/aether-init ]; then
+    mkdir -p /etc/default/grub.d
+    cat > /etc/default/grub.d/99-aether.cfg << 'EOF'
 # AetherOS: boot the Aether PID 1 loader (Loader Pattern). Recovery entries omit
 # GRUB_CMDLINE_LINUX_DEFAULT and therefore boot plain systemd as a safe fallback.
 GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT:-quiet splash} init=/sbin/aether-init"
 GRUB_DISABLE_RECOVERY="false"
 EOF
-update-grub 2>/dev/null || log "update-grub deferred to install time"
-log "Bootloader set: PID 1 = /sbin/aether-init (recovery mode = plain systemd)."
+    update-grub 2>/dev/null || log "update-grub deferred to install time"
+    log "Bootloader set: PID 1 = /sbin/aether-init (recovery mode = plain systemd)."
+else
+    log "aether-init not present — leaving bootloader at stock systemd (safe)."
+fi
 
 # Hardware watchdog safety interlock (engages only if a watchdog device exists).
 # Drop-in survives layer overlays.
