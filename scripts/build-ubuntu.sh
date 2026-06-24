@@ -177,12 +177,16 @@ for cfg in "$ISO_X/boot/grub/grub.cfg" "$ISO_X/EFI/boot/grub.cfg" "$ISO_X"/boot/
 done
 
 # ── 8. Rebuild the ISO, preserving the original EFI boot records ─────────────
-# Keep the original El Torito boot records verbatim (`-boot_image any keep`) and
-# surgically -update only the files we actually changed. This is more robust than
-# a recursive tree diff for a boot-critical image.
-step "Building final ISO (preserving boot)"
+# CRITICAL: a fresh -indev/-outdev rebuild (even with `-boot_image any keep`)
+# regenerates the image and mangles the BACKUP GPT header — UEFI firmware then
+# refuses to auto-launch the bootloader and drops to the UEFI shell.
+# Instead, copy the original ISO byte-for-byte (preserving the hybrid MBR + GPT +
+# El Torito EXACTLY) and surgically -update only the changed files IN PLACE.
+# Verified to auto-boot in EDK II firmware (the same family UTM/QEMU use).
+step "Building final ISO (byte-preserving boot structure)"
 mkdir -p "$OUTPUT"
-XARGS=(-indev "$ISO_SRC" -outdev "$OUT_ISO" -boot_image any keep -volid "AetherOS")
+cp "$ISO_SRC" "$OUT_ISO"
+XARGS=(-dev "$OUT_ISO" -boot_image any keep -overwrite on -volid "AetherOS")
 for f in "${CHANGED[@]}"; do
     XARGS+=(-update "$f" "$(iso_rel "$f")")
     echo "  -update $(iso_rel "$f")"
@@ -191,6 +195,13 @@ XARGS+=(-commit)
 xorriso "${XARGS[@]}" 2>&1 | tail -10 || die "xorriso rebuild failed"
 
 [ -f "$OUT_ISO" ] || die "output ISO missing after build"
+
+# Sanity-check the backup GPT is healthy (the defect that broke UEFI auto-boot).
+if xorriso -indev "$OUT_ISO" -report_system_area plain 2>/dev/null | grep -qi "GPT backup problems"; then
+    echo "  WARNING: backup GPT looks malformed — UEFI auto-boot may fail."
+else
+    echo "  GPT verified healthy — UEFI auto-boot OK."
+fi
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "✓ AetherOS ISO: $OUT_ISO ($(du -h "$OUT_ISO" | cut -f1))"
