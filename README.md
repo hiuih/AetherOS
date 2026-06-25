@@ -77,6 +77,33 @@ aether-do "set up a Python project in ~/proj with a venv and pytest"   # full ag
 
 ---
 
+## Updating Aether (no reinstall)
+
+Aether updates itself live from this repo — no rebuild, no reinstall. Install the
+updater once:
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/hiuih/AetherOS/main/ai-core/cli/aether-update -o /usr/local/bin/aether-update && sudo chmod +x /usr/local/bin/aether-update
+```
+
+Then pull the latest agent, GUI, and CLI anytime:
+
+```bash
+sudo aether-update          # fetch latest /opt/aether code + restart the daemon
+```
+
+Because Aether runs as root and can edit its own code, it can even update itself:
+
+```bash
+aether-do "run aether-update to update yourself to the latest version"
+```
+
+> Updates everything under `/opt/aether` (daemon, chat GUI, Settings, CLI, search
+> provider, web UI). Boot-level pieces (the PID-1 `aether-init`, GNOME shell
+> extension, theme) ship in the ISO and only change with a rebuild.
+
+---
+
 ## How it works
 
 ```

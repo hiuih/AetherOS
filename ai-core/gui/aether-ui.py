@@ -130,7 +130,8 @@ class AetherWindow(Adw.ApplicationWindow):
         self._busy = False
         self._live_label = None          # the streaming assistant label
         self._live_text = ""
-        self._tool_cards = {}
+        self._live_bubble = None
+        self._pending_tools = []         # FIFO queue of (card, spinner)
 
         prov = Gtk.CssProvider()
         prov.load_from_string(CSS)
@@ -254,13 +255,20 @@ class AetherWindow(Adw.ApplicationWindow):
         wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         is_user = role == "user"
         wrap.set_halign(Gtk.Align.END if is_user else Gtk.Align.START)
-        r = Gtk.Label(label="You" if is_user else "◈ Aether", xalign=1 if is_user else 0)
-        r.add_css_class("aether-role"); r.add_css_class("dim")
+        # header: role + timestamp, so the conversation reads chronologically
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        header.set_halign(Gtk.Align.END if is_user else Gtk.Align.START)
+        r = Gtk.Label(label="You" if is_user else "◈ Aether")
+        r.add_css_class("aether-role")
+        ts = Gtk.Label(label=datetime.now().strftime("%H:%M"))
+        ts.add_css_class("aether-role"); ts.add_css_class("dim")
+        for w in ((ts, r) if is_user else (r, ts)):
+            header.append(w)
         bub = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         bub.add_css_class("aether-bubble")
         bub.add_css_class("aether-user" if is_user else "aether-assistant")
         bub.set_size_request(min(120, 480), -1)
-        wrap.append(r); wrap.append(bub)
+        wrap.append(header); wrap.append(bub)
         self.msgs.append(wrap)
         return bub
 
@@ -352,6 +360,9 @@ class AetherWindow(Adw.ApplicationWindow):
         elif t == "user":
             pass  # rendered locally
         elif t == "tool_start":
+            # End the current text segment so this command — and any reply that
+            # comes after it — render BELOW, in chronological order.
+            self._close_live_segment()
             self._add_tool(ev.get("name", "tool"), ev.get("input", {}))
         elif t == "tool_result":
             self._finish_tool(ev.get("name", "tool"), ev.get("result", ""))
@@ -372,11 +383,22 @@ class AetherWindow(Adw.ApplicationWindow):
         self._set_busy(True, "Writing…")
         self._scroll()
 
-    def _finalize(self):
-        if self._live_label is not None and self._live_text:
+    def _close_live_segment(self):
+        """Finalize the current streaming text bubble (rich render) and reset, so
+        the next text starts a fresh bubble below whatever comes next."""
+        if self._live_label is not None and self._live_text.strip():
             self._render_rich(self._live_bubble, self._live_text)
+        elif self._live_label is not None and self._live_bubble is not None:
+            # empty/whitespace-only segment — drop the stray bubble
+            parent = self._live_bubble.get_parent()
+            if parent is not None:
+                self.msgs.remove(parent)
         self._live_label = None
         self._live_text = ""
+        self._live_bubble = None
+
+    def _finalize(self):
+        self._close_live_segment()
         self._set_busy(False, "Ready")
         self._scroll()
 
@@ -385,23 +407,23 @@ class AetherWindow(Adw.ApplicationWindow):
         card.add_css_class("tool-card")
         card.append(Gtk.Image.new_from_icon_name(TOOL_ICONS.get(name, "applications-system-symbolic")))
         lbl = Gtk.Label(label=name, xalign=0); lbl.add_css_class("tool-name")
-        spin = Gtk.Spinner(spinning=True)
         detail = Gtk.Label(label=self._tool_summary(name, inp), xalign=0)
         detail.add_css_class("dim"); detail.add_css_class("caption")
         detail.set_ellipsize(Pango.EllipsizeMode.END); detail.set_hexpand(True)
-        card.append(lbl); card.append(detail); card.append(spin)
+        ts = Gtk.Label(label=datetime.now().strftime("%H:%M")); ts.add_css_class("caption"); ts.add_css_class("dim")
+        spin = Gtk.Spinner(spinning=True)
+        card.append(lbl); card.append(detail); card.append(ts); card.append(spin)
         self.msgs.append(card)
-        self._tool_cards[name] = (card, spin)
+        # FIFO queue — robust to the same tool running many times in a row.
+        self._pending_tools.append((card, spin))
         self._set_busy(True, f"Running {name}…")
         self._scroll()
 
     def _finish_tool(self, name, result):
-        item = self._tool_cards.pop(name, None)
-        if item:
-            card, spin = item
+        if self._pending_tools:
+            card, spin = self._pending_tools.pop(0)
             spin.set_spinning(False); spin.set_visible(False)
-            check = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
-            card.append(check)
+            card.append(Gtk.Image.new_from_icon_name("emblem-ok-symbolic"))
 
     def _tool_summary(self, name, inp):
         if not isinstance(inp, dict):
