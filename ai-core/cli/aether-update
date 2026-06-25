@@ -1,0 +1,67 @@
+#!/bin/bash
+# ════════════════════════════════════════════════════════════════════════════
+# aether-update — pull the latest Aether code from GitHub and apply it live.
+#
+# Updates the runtime AI (/opt/aether: daemon, gui, cli, web, integrations) from
+# the repo and restarts the daemon — no ISO rebuild needed. Run as root:
+#
+#     sudo aether-update            # update from the default repo/branch
+#     sudo aether-update <branch>   # update from a specific branch
+#
+# Aether can also run this on itself (it already runs as root).
+# Note: boot-level pieces (aether-init PID 1, the GNOME shell extension, theme)
+# are baked into the ISO and only change with a rebuild — this updates the agent.
+# ════════════════════════════════════════════════════════════════════════════
+set -uo pipefail
+
+REPO="${AETHER_REPO:-hiuih/AetherOS}"
+BRANCH="${1:-main}"
+URL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "aether-update must run as root:  sudo aether-update" >&2
+    exit 1
+fi
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+echo "◈ Aether — fetching latest from ${REPO}@${BRANCH} ..."
+if ! curl -fsSL "$URL" | tar xz -C "$TMP" --strip-components=1 2>/dev/null; then
+    echo "✗ download failed (no network or bad repo/branch: $URL)" >&2
+    exit 1
+fi
+
+SRC="$TMP/ai-core"
+[ -d "$SRC" ] || { echo "✗ ai-core/ not found in download" >&2; exit 1; }
+
+echo "◈ Applying update to /opt/aether ..."
+changed=0
+for sub in daemon gui cli web integrations; do
+    if [ -d "$SRC/$sub" ]; then
+        mkdir -p "/opt/aether/$sub"
+        # Report which files differ, then copy.
+        for f in $(cd "$SRC/$sub" && find . -type f); do
+            if ! cmp -s "$SRC/$sub/$f" "/opt/aether/$sub/$f" 2>/dev/null; then
+                echo "   updated: $sub/${f#./}"
+                changed=$((changed+1))
+            fi
+        done
+        cp -rf "$SRC/$sub/." "/opt/aether/$sub/"
+    fi
+done
+
+# Re-link CLI entry points + keep them executable.
+chmod +x /opt/aether/cli/* 2>/dev/null || true
+for name in ask aether aether-update; do
+    [ -f "/opt/aether/cli/$name" ] && install -m 0755 "/opt/aether/cli/$name" "/usr/local/bin/$name" 2>/dev/null || true
+done
+
+echo "◈ Restarting Aether daemon ..."
+systemctl restart claused 2>/dev/null || true
+
+if [ "$changed" -eq 0 ]; then
+    echo "✓ Already up to date."
+else
+    echo "✓ Aether updated ($changed file(s)). Reopen the GUI to load the new version."
+fi

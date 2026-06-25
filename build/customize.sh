@@ -110,6 +110,9 @@ chmod +x /usr/local/bin/$name
 done
 chmod +x /opt/aether/cli/ask 2>/dev/null || true
 
+# Self-update command: pull latest Aether code from GitHub + restart (no rebuild).
+install -m 0755 /opt/aether/cli/aether-update /usr/local/bin/aether-update 2>/dev/null || true
+
 # Agentic long-task launcher
 cat > /usr/local/bin/aether-do << 'WRAP'
 #!/bin/bash
@@ -417,6 +420,17 @@ EOF
 chmod +x /etc/update-motd.d/10-aetheros
 # de-Ubuntu the motd
 rm -f /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news 2>/dev/null || true
+
+# Disable apport crash-report popups ("… experienced an internal error"). They're
+# a developer/QA tool, not appropriate for a consumer distro. Crashes still log to
+# /var/crash; we just don't nag the user with a dialog.
+if [ -f /etc/default/apport ]; then
+    sed -i 's/^enabled=.*/enabled=0/' /etc/default/apport
+    grep -q '^enabled=' /etc/default/apport || echo 'enabled=0' >> /etc/default/apport
+else
+    echo 'enabled=0' > /etc/default/apport
+fi
+systemctl disable apport.service 2>/dev/null || true
 
 # ── 11. Restore stock apt state; NO trimming ─────────────────────────────────
 # Put cdrom.sources back so the Ubuntu installer's offline apt setup works.
