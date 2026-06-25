@@ -854,7 +854,22 @@ class AetherAgent:
     async def chat(self, user_message: str) -> AsyncGenerator[str, None]:
         self.conversation.append({"role": "user", "content": user_message})
         await self._broadcast({"type": "user", "content": user_message})
+        try:
+            async for chunk in self._chat_loop():
+                yield chunk
+        except Exception as e:
+            log.error("chat failed: %s", traceback.format_exc())
+            # Reset context so the very next message is guaranteed to work, then
+            # surface a readable message instead of a 500.
+            self.conversation = []
+            msg = "\n\n⚠️  " + self._friendly_error(e)
+            await self._broadcast({"type": "chunk", "content": msg})
+            yield msg
+        finally:
+            await self._broadcast({"type": "done"})
+            self._trim_conversation()
 
+    async def _chat_loop(self) -> AsyncGenerator[str, None]:
         while True:
             response_text = ""
             tool_calls = []
@@ -868,31 +883,24 @@ class AetherAgent:
                 tools=TOOLS,
             ) as stream:
                 async for event in stream:
-                    if hasattr(event, "type"):
-                        if event.type == "content_block_delta":
-                            if hasattr(event.delta, "text"):
-                                chunk = event.delta.text
-                                response_text += chunk
-                                await self._broadcast({"type": "chunk", "content": chunk})
-                                yield chunk
+                    if hasattr(event, "type") and event.type == "content_block_delta" \
+                            and hasattr(event.delta, "text"):
+                        chunk = event.delta.text
+                        response_text += chunk
+                        await self._broadcast({"type": "chunk", "content": chunk})
+                        yield chunk
 
                 response_msg = await stream.get_final_message()
                 stop_reason = response_msg.stop_reason
-                tool_calls = [
-                    b for b in response_msg.content if b.type == "tool_use"
-                ]
+                tool_calls = [b for b in response_msg.content if b.type == "tool_use"]
 
             assistant_content = []
             if response_text:
                 assistant_content.append({"type": "text", "text": response_text})
             for tc in tool_calls:
                 assistant_content.append({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.input,
+                    "type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input,
                 })
-
             if assistant_content:
                 self.conversation.append({"role": "assistant", "content": assistant_content})
 
@@ -905,17 +913,40 @@ class AetherAgent:
                 result = await self.executor.execute(tc.name, tc.input)
                 await self._broadcast({"type": "tool_result", "name": tc.name, "result": result[:500]})
                 tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc.id,
-                    "content": result,
+                    "type": "tool_result", "tool_use_id": tc.id, "content": result,
                 })
-
             self.conversation.append({"role": "user", "content": tool_results})
 
-        await self._broadcast({"type": "done"})
+    def _trim_conversation(self, keep: int = 40):
+        """Trim history, but ALWAYS leave it valid for the API: it must begin on a
+        clean user turn (a plain-text message, not orphaned tool_result blocks),
+        or the next request 400s (which the old blind [-40:] slice caused)."""
+        conv = self.conversation[-keep:] if len(self.conversation) > keep else list(self.conversation)
+        while conv:
+            m = conv[0]
+            if m.get("role") == "user":
+                c = m.get("content")
+                if isinstance(c, str):
+                    break
+                if isinstance(c, list) and not any(
+                        isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+                    break
+            conv = conv[1:]
+        self.conversation = conv
 
-        if len(self.conversation) > 60:
-            self.conversation = self.conversation[-40:]
+    def _friendly_error(self, e: Exception) -> str:
+        name = type(e).__name__
+        s = str(e).lower()
+        if name == "AuthenticationError" or "authentication" in s or "invalid x-api-key" in s:
+            return "Your Claude API key looks invalid or expired — update it in Aether Settings."
+        if name == "RateLimitError" or "rate limit" in s:
+            return "Claude is rate-limiting right now — wait a few seconds and try again."
+        if "overloaded" in s:
+            return "Claude is overloaded at the moment — try again shortly."
+        if "credit" in s or "billing" in s:
+            return "Your Anthropic account may be out of credits — check console.anthropic.com."
+        return (f"I hit an error talking to Claude ({type(e).__name__}). I've reset my "
+                f"context, so just try again. Details: {str(e)[:200]}")
 
     async def run_autonomous_task(self, task: str):
         log.info("Autonomous task: %s", task[:100])

@@ -101,14 +101,17 @@ python3 -m venv --system-site-packages /opt/aether/venv
     2>/dev/null || log "pip install had issues (will retry at first boot)"
 
 # CLI wrappers
-for name in ask aether; do
-cat > /usr/local/bin/$name << WRAP
+# `ask` = simple one-shot;  `aether` = rich agentic CLI / REPL (shows tool calls).
+cat > /usr/local/bin/ask << 'WRAP'
 #!/bin/bash
-exec /opt/aether/venv/bin/python3 /opt/aether/cli/ask "\$@"
+exec /opt/aether/venv/bin/python3 /opt/aether/cli/ask "$@"
 WRAP
-chmod +x /usr/local/bin/$name
-done
-chmod +x /opt/aether/cli/ask 2>/dev/null || true
+cat > /usr/local/bin/aether << 'WRAP'
+#!/bin/bash
+exec /opt/aether/venv/bin/python3 /opt/aether/cli/aether-cli "$@"
+WRAP
+chmod +x /usr/local/bin/ask /usr/local/bin/aether
+chmod +x /opt/aether/cli/ask /opt/aether/cli/aether-cli 2>/dev/null || true
 
 # Self-update command: pull latest Aether code from GitHub + restart (no rebuild).
 install -m 0755 /opt/aether/cli/aether-update /usr/local/bin/aether-update 2>/dev/null || true

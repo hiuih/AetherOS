@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+aether — a rich, agentic terminal interface to your system's AI.
+
+    aether                       interactive chat (REPL)
+    aether "do something"        one-shot task
+    echo logs | aether "fix this"   pipe stdin in as context
+
+Streams Aether's reply and shows each tool call live (spinner → ✓) by talking to
+the daemon over its WebSocket. Falls back to plain text if `rich` isn't present.
+"""
+import asyncio
+import json
+import sys
+from datetime import datetime
+
+WS_URL = "ws://localhost:7474/ws"
+
+try:
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.text import Text
+    from rich.live import Live
+    from rich.spinner import Spinner
+    _c = Console()
+    RICH = True
+except Exception:
+    _c = None
+    RICH = False
+
+GLYPH = {
+    "bash": "⚡", "read_file": "📖", "write_file": "✏️", "edit_file": "✏️",
+    "delete_file": "🗑", "screenshot": "📸", "mouse_click": "🖱", "keyboard_type": "⌨",
+    "list_processes": "📊", "kill_process": "⛔", "http_request": "🌐", "notify": "🔔",
+    "system_info": "💻", "search_files": "🔍", "install_package": "📦",
+    "open_application": "🚀", "get_clipboard": "📋", "set_clipboard": "📋",
+    "manage_service": "⚙", "wake_on_lan": "📡", "quarantine_file": "🛡",
+    "set_performance_mode": "🎮",
+}
+
+
+def _summary(inp):
+    if isinstance(inp, dict):
+        for k in ("command", "path", "package", "app", "service", "url", "task", "title"):
+            if k in inp and inp[k]:
+                return str(inp[k]).replace("\n", " ")[:100]
+    return ""
+
+
+def out(s=""):
+    (_c.print(s) if RICH else print(s))
+
+
+async def converse(message: str) -> bool:
+    """Send one message, render the streamed reply + tool calls. Returns ok."""
+    try:
+        import websockets
+    except Exception:
+        print("websockets not available in the Aether venv.", file=sys.stderr)
+        return False
+
+    try:
+        async with websockets.connect(WS_URL, max_size=16 * 1024 * 1024, open_timeout=6) as ws:
+            await ws.send(json.dumps({"type": "chat", "message": message}))
+            buf, streaming, thinking = "", False, True
+            if RICH:
+                _c.print("[dim]· thinking …[/]", end="\r")
+            async for raw in ws:
+                try:
+                    ev = json.loads(raw)
+                except Exception:
+                    continue
+                t = ev.get("type")
+
+                if t == "chunk":
+                    if thinking and RICH:
+                        _c.print(" " * 20, end="\r")  # clear "thinking"
+                        thinking = False
+                    if not streaming:
+                        if RICH:
+                            _c.print("[bold magenta]◈ Aether[/]")
+                        else:
+                            print("◈ Aether")
+                        streaming = True
+                    sys.stdout.write(ev.get("content", ""))
+                    sys.stdout.flush()
+                    buf += ev.get("content", "")
+
+                elif t == "tool_start":
+                    thinking = False
+                    if streaming:
+                        sys.stdout.write("\n")
+                        streaming = False
+                    name = ev.get("name", "tool")
+                    g = GLYPH.get(name, "🔧")
+                    summ = _summary(ev.get("input", {}))
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    if RICH:
+                        _c.print(f"  [dim]{ts}[/]  [magenta]{g} {name}[/]  [dim]{summ}[/]")
+                    else:
+                        print(f"  {ts}  {g} {name}  {summ}")
+
+                elif t == "done":
+                    if streaming:
+                        sys.stdout.write("\n")
+                    elif thinking and RICH:
+                        _c.print(" " * 20, end="\r")
+                    break
+            return True
+    except Exception as e:
+        if RICH:
+            _c.print(f"[red]Couldn't reach Aether:[/] {e}")
+            _c.print("[dim]Check the daemon:  systemctl status claused[/]")
+        else:
+            print(f"Couldn't reach Aether: {e}\nCheck:  systemctl status claused")
+        return False
+
+
+def banner():
+    if RICH:
+        _c.print(Panel.fit(
+            "[bold magenta]◈ Aether[/] — your system's AI\n"
+            "[dim]Type a request. 'exit' to quit. Aether has full system access.[/]",
+            border_style="magenta"))
+    else:
+        print("◈ Aether — type a request, 'exit' to quit.\n")
+
+
+def repl():
+    banner()
+    while True:
+        try:
+            msg = (_c.input("[bold green]›[/] ") if RICH else input("› ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            out("\n[dim]bye[/]" if RICH else "\nbye")
+            return
+        if msg in ("exit", "quit", ":q"):
+            return
+        if not msg:
+            continue
+        try:
+            asyncio.run(converse(msg))
+        except KeyboardInterrupt:
+            out("\n[dim](interrupted)[/]" if RICH else "\n(interrupted)")
+        out()
+
+
+def main():
+    args = sys.argv[1:]
+    piped = ""
+    if not sys.stdin.isatty():
+        try:
+            piped = sys.stdin.read()
+        except Exception:
+            piped = ""
+
+    if args:
+        message = " ".join(args)
+        if piped:
+            message += "\n\n--- piped input ---\n" + piped
+        asyncio.run(converse(message))
+    elif piped:
+        asyncio.run(converse(piped))
+    else:
+        repl()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

@@ -51,11 +51,19 @@ for sub in daemon gui cli web integrations; do
     fi
 done
 
-# Re-link CLI entry points + keep them executable.
+# (Re)create CLI entry points. ask/aether are Python and must run via the Aether
+# venv (it has anthropic/websockets/rich); aether-update is plain bash.
 chmod +x /opt/aether/cli/* 2>/dev/null || true
-for name in ask aether aether-update; do
-    [ -f "/opt/aether/cli/$name" ] && install -m 0755 "/opt/aether/cli/$name" "/usr/local/bin/$name" 2>/dev/null || true
-done
+_wrap() {  # $1 = command name, $2 = script under /opt/aether/cli
+    cat > "/usr/local/bin/$1" <<WRAP
+#!/bin/bash
+exec /opt/aether/venv/bin/python3 /opt/aether/cli/$2 "\$@"
+WRAP
+    chmod +x "/usr/local/bin/$1"
+}
+[ -f /opt/aether/cli/ask ]        && _wrap ask ask
+[ -f /opt/aether/cli/aether-cli ] && _wrap aether aether-cli
+[ -f /opt/aether/cli/aether-update ] && install -m 0755 /opt/aether/cli/aether-update /usr/local/bin/aether-update
 
 echo "◈ Restarting Aether daemon ..."
 systemctl restart claused 2>/dev/null || true

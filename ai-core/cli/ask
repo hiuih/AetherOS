@@ -65,9 +65,17 @@ def ask_via_http(message: str, stream: bool = False) -> str:
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
                 data = json.loads(resp.read())
-            return data.get("response", "")
+            return data.get("response") or data.get("error") or ""
+        except urllib.error.HTTPError as e:
+            # The daemon answered with an error status — read its body, don't
+            # mislabel it as "unreachable".
+            try:
+                body = json.loads(e.read())
+                return body.get("error") or body.get("response") or f"[Aether error {e.code}]"
+            except Exception:
+                return f"[Aether returned HTTP {e.code}. Try again, or: systemctl restart claused]"
         except urllib.error.URLError as e:
-            return f"[Error: daemon unreachable — {e}]"
+            return f"[Error: daemon unreachable — {e}. Is claused running?]"
 
 
 def ask_via_socket(message: str) -> str:
