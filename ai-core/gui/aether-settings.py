@@ -72,15 +72,34 @@ class SettingsWindow(Adw.PreferencesWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_cfg(self, cfg):
+        # Never let a UI-populate error crash the app (apport popup). Degrade.
+        try:
+            self._populate(cfg)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            try:
+                self._ready_row.set_subtitle("Could not load settings — is claused running?")
+            except Exception:
+                pass
+            self._loading = False
+        return False
+
+    def _populate(self, cfg):
         self._cfg = cfg
         self._loading = True
+        # NOTE: _key_row is an Adw.PasswordEntryRow, which has NO subtitle — all
+        # status text goes on _ready_row (an Adw.ActionRow).
         if "_error" in cfg:
-            self._key_row.set_subtitle("Daemon offline — start claused")
+            self._ready_row.set_subtitle("Daemon offline — start claused")
             self._loading = False
             return
-        # key status
-        self._key_row.set_subtitle("Connected ✓" if cfg.get("has_key") else "No API key set")
-        self._ready_row.set_subtitle("Active and ready" if cfg.get("agent_ready") else "Waiting for API key")
+        if cfg.get("agent_ready"):
+            self._ready_row.set_subtitle("Active and ready ✓")
+        elif cfg.get("has_key"):
+            self._ready_row.set_subtitle("API key set — Aether is starting")
+        else:
+            self._ready_row.set_subtitle("No API key yet — paste yours below")
         # model
         models = cfg.get("available_models", [])
         self._model_ids = [m["id"] for m in models]
@@ -204,7 +223,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         if key.startswith("sk-ant-"):
             self._save({"api_key": key}, "API key saved — Aether activating")
             row.set_text("")
-            self._key_row.set_subtitle("Connected ✓")
+            self._ready_row.set_subtitle("API key set — Aether is starting")
 
     def _on_model_changed(self, combo, _p):
         if self._loading:
